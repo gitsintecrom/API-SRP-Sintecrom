@@ -24,12 +24,18 @@ const userRoutes = require("./routes/users");
 const clientRoutes = require("./routes/clients");
 const authRoutes = require("./routes/authRoutes");
 const rolRoutes = require("./routes/rolRoutes");
+const permisoRoutes = require("./routes/permisoRoutes");
+
+const abastecimientoRoutes = require("./routes/abastecimientoRoutes");
 
 // Usar rutas
 app.use("/api/users", userRoutes);
 app.use("/api/clients", clientRoutes);
 app.use("/api/auth", authRoutes); 
 app.use("/api/roles", rolRoutes);
+app.use("/api/permisos", permisoRoutes);
+
+app.use("/api/abastecimiento", abastecimientoRoutes);
 
 // Ruta de prueba
 app.get("/", (req, res) => {

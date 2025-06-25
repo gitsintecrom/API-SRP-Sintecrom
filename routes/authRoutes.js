@@ -9,4 +9,6 @@ console.log("¡El archivo de rutas de autenticación se ha cargado!"); // <-- A�
 // Ruta de login
 router.post("/login", authController.login);
 
+router.post("/verify-supervisor", authController.verifySupervisor);
+
 module.exports = router;

@@ -54,12 +54,16 @@ const getUserById = async (req, res) => {
 
 // CREAR UN NUEVO USUARIO (Versión corregida)
 const createUser = async (req, res) => {
+  console.log("CONTENIDO DE REQ.BODY:", req.body);
   const { nombre, email, password, idRol } = req.body;
 
   try {
     // Validación de entrada (se mantiene igual)
     if (!nombre || !password || !idRol) {
-      return res.status(400).json({ error: "Nombre, contraseña y rol son requeridos" });
+      return res.status(400).json({ 
+        error: "Nombre, contraseña y rol son requeridos",
+        received_body: req.body // <-- Añadimos esto para ver la respuesta en el navegador
+      }); 
     }
 
     // Comprobación de usuario existente (se mantiene igual)
