@@ -39,7 +39,7 @@ app.use("/api/abastecimiento", abastecimientoRoutes);
 
 // Ruta de prueba
 app.get("/", (req, res) => {
-  res.send("¡API Node.js con SQL Server funcionando!");
+  res.send("¡API Node.js con SQL Server funcionando perfectamente!");
 });
 
 // Iniciar el servidor
