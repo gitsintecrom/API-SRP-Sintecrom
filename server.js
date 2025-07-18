@@ -46,6 +46,7 @@ const permisoRoutes = require("./routes/permisoRoutes");
 const abastecimientoRoutes = require("./routes/abastecimientoRoutes");
 const secuenciamientoRutes = require('./routes/secuenciamientoRoutes');
 const rechazosRoutes = require('./routes/rechazosRoutes');
+const paradasRoutes = require('./routes/paradasRoutes');
 
 app.use("/api/users", userRoutes);
 app.use("/api/clients", clientRoutes);
@@ -55,6 +56,7 @@ app.use("/api/permisos", permisoRoutes);
 app.use("/api/abastecimiento", abastecimientoRoutes);
 app.use('/api/secuenciamiento', secuenciamientoRutes);
 app.use('/api/rechazos', rechazosRoutes);
+app.use('/api/paradas', paradasRoutes); 
 
 
 // Ruta de prueba
