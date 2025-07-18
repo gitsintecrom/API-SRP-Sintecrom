@@ -44,6 +44,8 @@ const authRoutes = require("./routes/authRoutes");
 const rolRoutes = require("./routes/rolRoutes");
 const permisoRoutes = require("./routes/permisoRoutes");
 const abastecimientoRoutes = require("./routes/abastecimientoRoutes");
+const secuenciamientoRutes = require('./routes/secuenciamientoRoutes');
+const rechazosRoutes = require('./routes/rechazosRoutes');
 
 app.use("/api/users", userRoutes);
 app.use("/api/clients", clientRoutes);
@@ -51,6 +53,9 @@ app.use("/api/auth", authRoutes);
 app.use("/api/roles", rolRoutes);
 app.use("/api/permisos", permisoRoutes);
 app.use("/api/abastecimiento", abastecimientoRoutes);
+app.use('/api/secuenciamiento', secuenciamientoRutes);
+app.use('/api/rechazos', rechazosRoutes);
+
 
 // Ruta de prueba
 app.get("/", (req, res) => {
