@@ -1,31 +1,18 @@
-// controllers/authController.js
-const { Knex } = require("knex");
+// // controllers/authController.js
+
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 
-// Importar la conexión existente de database.js
 const knex = require("../config/database");
 
 const secretKey = process.env.JWT_SECRET || "your-secret-key";
 
-// Función para hashear contraseñas
-const hashPassword = async (password) => {
-  return await bcrypt.hash(password, 10);
-};
-
-// Función para verificar contraseñas
-const verifyPassword = async (password, hashedPassword) => {
-  return await bcrypt.compare(password, hashedPassword);
-};
-
-// Login
-
 exports.login = async (req, res) => {
-  const { nombre, password } = req.body; // <-- CAMBIO 1
+  const { nombre, password } = req.body;
 
   try {
-    const user = await knex("UsuariosDB").where({ nombre }).first(); // <-- CAMBIO 2
+    const user = await knex("UsuariosDB").where({ nombre }).first();
     
     if (!user) {
       return res.status(401).json({ success: false, message: "Usuario o contraseña incorrectos" });
@@ -41,14 +28,25 @@ exports.login = async (req, res) => {
       .where({ idRol: user.idRol })
       .select("clave");
 
+    // Usar el valor original de cambioPassword como viene de la base de datos
+    const cambioPassword = user.cambioPassword;
+
+    // Depuración: Ver el valor y tipo
+    console.log("Valor de cambioPassword desde DB:", cambioPassword, " (Tipo:", typeof cambioPassword, ")");
+
     const payload = {
       id: user.idUsuario,
       nombre: user.nombre,
-      email: user.email, // Todavía podemos incluir el email en el token
+      email: user.email,
+      idRol: user.idRol,
       permisos: permisos.map(p => p.clave),
+      cambioPassword: cambioPassword
     };
 
     const token = jwt.sign(payload, secretKey, { expiresIn: '8.5h' });
+
+    // Depuración: Ver el payload completo
+    console.log("Payload enviado:", payload);
 
     res.json({
       success: true,
@@ -62,7 +60,6 @@ exports.login = async (req, res) => {
   }
 };
 
-// VERIFICAR CREDENCIALES DE UN SUPERVISOR
 exports.verifySupervisor = async (req, res) => {
   const { nombre, password } = req.body;
 
@@ -81,14 +78,11 @@ exports.verifySupervisor = async (req, res) => {
       return res.status(401).json({ success: false, message: "Credenciales incorrectas." });
     }
 
-    // Comprobar si el rol del usuario es 'Supervisor' (asumiendo idRol = 5)
     if (user.idRol !== 5) {
-      return res.status(403).json({ success: false, message: "El usuario no tiene permisos de supervisor." }); // 403 Forbidden
+      return res.status(403).json({ success: false, message: "El usuario no tiene permisos de supervisor." });
     }
 
-    // Si todo es correcto
     res.status(200).json({ success: true, message: "Autorización de supervisor exitosa." });
-
   } catch (error) {
     console.error("Error en la verificación de supervisor:", error);
     res.status(500).json({ success: false, message: "Error interno del servidor." });

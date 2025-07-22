@@ -1,43 +1,35 @@
+// /server.js (Versión Final y Corregida)
+
 const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
 
-// Cargar variables de entorno desde el archivo .env
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3001;
 
-// --- CONFIGURACIÓN DE CORS PARA MÚLTIPLES ORÍGENES ---
-// Lista de los orígenes que tienen permiso para acceder a esta API
+// --- Configuración de CORS ---
 const allowedOrigins = [
-  'http://localhost:5173',      // Origen para desarrollo local con Vite
-  'http://192.168.10.69',       // Origen para cuando la app de React esté desplegada en esta IP
-  // Si tienes un dominio, añádelo aquí: 'http://tu-dominio.com'
+  'http://localhost:5173',
+  'http://192.168.10.69',
 ];
-
 const corsOptions = {
   origin: function (origin, callback) {
-    // La lógica de la función es:
-    // 1. Si la petición NO tiene un 'origin' (como Postman o cURL), permitirla.
-    // 2. Si el 'origin' de la petición ESTÁ en nuestra lista de 'allowedOrigins', permitirla.
-    // 3. Si no, denegarla.
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      callback(new Error('La política de CORS para este sitio no permite el acceso desde el origen especificado.'));
+      callback(new Error('La política de CORS no permite el acceso desde este origen.'));
     }
   },
-  optionsSuccessStatus: 200 // Para compatibilidad con navegadores antiguos
+  optionsSuccessStatus: 200
 };
-
-// Aplicar el middleware de CORS con la nueva configuración
 app.use(cors(corsOptions));
+app.use(express.json());
 
-// Aplicar otros middlewares DESPUÉS de CORS
-app.use(express.json()); // Middleware para parsear JSON
-
-// --- Importar y Usar Rutas ---
+// ===== INICIO DE LA CORRECCIÓN CLAVE =====
+// --- Importar Middleware y Rutas ---
+const verifyToken = require("./verifyToken"); // <-- 1. Importamos el middleware
 const userRoutes = require("./routes/users");
 const clientRoutes = require("./routes/clients");
 const authRoutes = require("./routes/authRoutes");
@@ -48,15 +40,20 @@ const secuenciamientoRutes = require('./routes/secuenciamientoRoutes');
 const rechazosRoutes = require('./routes/rechazosRoutes');
 const paradasRoutes = require('./routes/paradasRoutes');
 
-app.use("/api/users", userRoutes);
-app.use("/api/clients", clientRoutes);
-app.use("/api/auth", authRoutes); 
-app.use("/api/roles", rolRoutes);
-app.use("/api/permisos", permisoRoutes);
-app.use("/api/abastecimiento", abastecimientoRoutes);
-app.use('/api/secuenciamiento', secuenciamientoRutes);
-app.use('/api/rechazos', rechazosRoutes);
-app.use('/api/paradas', paradasRoutes); 
+// --- Definir Rutas PÚBLICAS (NO necesitan token) ---
+app.use("/api/auth", authRoutes);
+
+// --- Definir Rutas PROTEGIDAS (SÍ necesitan token) ---
+// 2. Aplicamos el middleware `verifyToken` ANTES de cada manejador de rutas protegido.
+app.use("/api/users", verifyToken, userRoutes);
+app.use("/api/clients", verifyToken, clientRoutes);
+app.use("/api/roles", verifyToken, rolRoutes);
+app.use("/api/permisos", verifyToken, permisoRoutes);
+app.use("/api/abastecimiento", verifyToken, abastecimientoRoutes);
+app.use('/api/secuenciamiento', verifyToken, secuenciamientoRutes);
+app.use('/api/rechazos', verifyToken, rechazosRoutes);
+app.use('/api/paradas', verifyToken, paradasRoutes); 
+// ===== FIN DE LA CORRECCIÓN CLAVE =====
 
 
 // Ruta de prueba
