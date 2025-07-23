@@ -83,7 +83,21 @@ El frontend es la parte visual e interactiva de la aplicación.
     - **React-Data-Table-Component:** Para crear las tablas de datos con paginación, ordenamiento y filtrado.
         
     - **AdminLTE 3:** Plantilla de estilos y componentes base para la interfaz.
-        
+
+- **Configuración (.env):**  
+    El Frontend se configura mediante un archivo .env en su raíz. Este archivo es **crítico** y debe contener:
+    
+```
+VITE_APP_NAME="Sintecrom"
+VITE_APP_VERSION="3.0.0"
+VITE_INACTIVITY_MINUTES=540
+#Desarrollo
+VITE_API_BASE_URL="http://127.0.0.1:3001/api"
+#Produccion
+#VITE_API_BASE_URL="http://192.168.10.69:3001/api"
+VITE_AGENT_BALANZA_URL="http://localhost:4000"
+```
+    
 - **Estructura de Carpetas:**
     
     - public/: Contiene los archivos estáticos de la plantilla AdminLTE (dist/, plugins/) y el archivo .htaccess necesario para el despliegue en Apache.
