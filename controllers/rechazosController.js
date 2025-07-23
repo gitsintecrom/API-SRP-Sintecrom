@@ -229,13 +229,17 @@ const reprogramarRechazo = async (req, res) => {
     
     let sobranteInt;
     const sobranteValue = Array.isArray(sobrante) ? sobrante[0] : sobrante;
-    if (sobranteValue === "Sobrante") {
-      sobranteInt = 1;
-    } else if (sobranteValue === "Scrap") {
-      sobranteInt = 2;
-    } else {
-      sobranteInt = 0;
-    }
+    // console.log("sobranteValue : ", sobranteValue);
+    
+    // if (sobranteValue === "Sobrante") {
+    //   sobranteInt = 1;
+    // } else if (sobranteValue === "Scrap") {
+    //   sobranteInt = 2;
+    // } else {
+    //   sobranteInt = 0;
+    // }
+
+    sobranteInt = sobranteValue;
 
     const codigoLimpio = codigo.trim();
     

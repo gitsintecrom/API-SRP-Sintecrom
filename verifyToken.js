@@ -22,7 +22,7 @@ const verifyToken = (req, res, next) => {
         req.user = decoded; // `decoded` debe contener el id del usuario
         
         // Este log DEBE aparecer en tu consola del backend en cada petición protegida
-        console.log("-> Token verificado correctamente. Usuario en req.user:", req.user);
+        // console.log("-> Token verificado correctamente. Usuario en req.user:", req.user);
         
         next(); // Continuar a la ruta solicitada
     } catch (error) {

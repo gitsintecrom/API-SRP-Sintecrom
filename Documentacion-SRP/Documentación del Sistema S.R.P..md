@@ -1,6 +1,6 @@
 ### 1. Introducción y Arquitectura General
 
-Este documento describe la arquitectura y el funcionamiento del sistema migrado desde una aplicación de escritorio .NET a una aplicación web moderna. El objetivo de la migración fue modernizar la tecnología, mejorar la mantenibilidad y centralizar la lógica de negocio.
+Este documento describe la arquitectura y el funcionamiento del sistema migrado desde una aplicación de escritorio Visual Basic a una aplicación web moderna. El objetivo de la migración fue modernizar la tecnología, mejorar la mantenibilidad y centralizar la lógica de negocio.
 
 La arquitectura se compone de tres capas principales:
 
@@ -94,8 +94,6 @@ El frontend es la parte visual e interactiva de la aplicación.
         
     - src/context/: Contiene los "Contextos" de React, que son el sistema de gestión de estado global de la aplicación (AuthContext, ThemeContext, LayoutContext).
         
-    - src/hooks/: Contiene hooks personalizados. useAuth.jsx es crucial para acceder al contexto de autenticación desde cualquier componente.
-        
     - src/utils/: Contiene utilidades, como ProtectedRoute.jsx, que es el componente "guardián" de las rutas protegidas.
         
     - src/layouts/: Contiene los esqueletos de página (MainLayout para la app principal, PublicLayout para el login).
@@ -175,5 +173,52 @@ El frontend es la parte visual e interactiva de la aplicación.
     - Asegurarse de que mod_rewrite de Apache esté habilitado.
         
     - Asegurarse de que la configuración de Apache para el directorio permita AllowOverride All para que lea el archivo .htaccess.
-        
+
+```
+sudo nano /etc/apache2/sites-available/000-default.conf
+```
+
+```
+<VirtualHost *:80>
+    ServerAdmin webmaster@localhost
+    DocumentRoot /var/www/html/sintecrom-app-front
+
+    # --- SECCIÓN MODIFICADA ---
+    <Directory /var/www/html/sintecrom-app-front>
+        Options Indexes FollowSymLinks
+        AllowOverride All
+        Require all granted
+        # Añadimos esta línea para asegurar que se puedan seguir enlaces simbólicos
+        # y que el DirectoryIndex se aplique si es necesario.
+        FallbackResource /index.html
+    </Directory>
+    # ---------------------------
+
+    # Las reglas de RewriteEngine ya no son estrictamente necesarias
+    # si usamos FallbackResource, pero no hace daño dejarlas como un seguro.
+    RewriteEngine on
+    RewriteCond %{REQUEST_FILENAME} -s [OR]
+    RewriteCond %{REQUEST_FILENAME} -l [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^.*$ - [NC,L]
+    RewriteRule ^(.*) /index.html [NC,L]
+
+    ErrorLog ${APACHE_LOG_DIR}/error.log
+    CustomLog ${APACHE_LOG_DIR}/access.log combined
+</VirtualHost>
+```
+
     - Ajustar los permisos de los archivos en el servidor para que el usuario de Apache (www-data) pueda leerlos, y tu usuario (pmorrone) pueda escribir en ellos.
+
+```
+cd /var/www/html/sintecrom-app-front
+
+sudo chown -R pmorrone:www-data /var/www/html/sintecrom-app-front
+
+sudo find /var/www/html/sintecrom-app-front -type d -exec chmod 775 {} \;
+
+sudo find /var/www/html/sintecrom-app-front -type f -exec chmod 664 {} \;
+
+sudo usermod -aG www-data pmorrone
+```
+

@@ -90,7 +90,7 @@ INSERT INTO dbo.Permisos (nombre, clave) VALUES
 ('Ver Calidad', 'ver_calidad'),
 ('Ver Otros Modulos', 'ver_otros'),
 ('Ver Usuarios', 'ver_usuarios'),
-('Ver Permisos', 'ver_permisos');
+('Ver Permisos', 'ver_permisos'),
 ('Ver Roles', 'ver_roles');
 GO
 
@@ -100,7 +100,7 @@ INSERT INTO dbo.RolPermiso (idRol, idPermiso) VALUES
 (1, 1), -- ver_calidad
 (1, 2), -- ver_otros
 (1, 3), -- ver_usuarios
-(1, 4); -- ver_permisos
+(1, 4), -- ver_permisos
 (1, 5); -- ver_roles
 GO
 
