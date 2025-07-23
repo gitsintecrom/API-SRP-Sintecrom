@@ -1,0 +1,198 @@
+{
+  "main": {
+    "id": "73aa247c3241ad65",
+    "type": "split",
+    "children": [
+      {
+        "id": "e210e4b6b201908c",
+        "type": "tabs",
+        "dimension": 70.9731543624161,
+        "children": [
+          {
+            "id": "2233018d200cc571",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Documentación del Sistema S.R.P..md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "Documentación del Sistema S.R.P."
+            }
+          }
+        ]
+      },
+      {
+        "id": "7e63ad1ed2bbdf87",
+        "type": "tabs",
+        "dimension": 29.026845637583893,
+        "children": [
+          {
+            "id": "11525eae1f2929ea",
+            "type": "leaf",
+            "state": {
+              "type": "graph",
+              "state": {},
+              "icon": "lucide-git-fork",
+              "title": "Vista gráfica"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "e700987f98790743",
+    "type": "split",
+    "children": [
+      {
+        "id": "48c594af60ee11e3",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "680e7b424665e7c0",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Explorador de archivos"
+            }
+          },
+          {
+            "id": "2c0597981575d2be",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Buscar"
+            }
+          },
+          {
+            "id": "21779f137fae49f7",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Marcadores"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 205.5
+  },
+  "right": {
+    "id": "1302a47b02cbde4c",
+    "type": "split",
+    "children": [
+      {
+        "id": "979af9379f74326a",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "03114492dd8cbcd8",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Enlaces entrantes"
+            }
+          },
+          {
+            "id": "6199ede8aac84f45",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Enlaces salientes"
+            }
+          },
+          {
+            "id": "ba6410233d7c394a",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Etiquetas"
+            }
+          },
+          {
+            "id": "726daaeef4638ac5",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Esquema"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Abrir selector rápido": false,
+      "graph:Abrir vista gráfica": false,
+      "canvas:Crear nuevo lienzo": false,
+      "daily-notes:Abrir la nota de hoy": false,
+      "templates:Insertar plantilla": false,
+      "command-palette:Abrir paleta de comandos": false
+    }
+  },
+  "active": "11525eae1f2929ea",
+  "lastOpenFiles": [
+    "Documentación del Sistema S.R.P..md",
+    "Pasted image 20250723100753.png",
+    "Pasted image 20250723100804.png",
+    "Sin título.md",
+    "Sin título 2.md",
+    "Sin título 1.md",
+    "Sin nombre 2",
+    "Sin nombre 1",
+    "Sin nombre"
+  ]
+}
