@@ -206,11 +206,11 @@
 
 // /src/controllers/rechazosController.js (VERSIÓN FINAL Y CORRECTA)
 
-const knex = require("../config/database");
+const { dbRegistracionNET } = require("../config/database");
 
 const getRechazos = async (req, res) => {
   try {
-    const rechazos = await knex.raw("EXEC SP_TraerRechazosOpCerradas");
+    const rechazos = await dbRegistracionNET.raw("EXEC SP_TraerRechazosOpCerradas");
     res.status(200).json(rechazos);
   } catch (error) {
     console.error("Error en getRechazos:", error);
@@ -254,7 +254,7 @@ const reprogramarRechazo = async (req, res) => {
     console.log(parametrosParaSP);
     
 
-    await knex.raw(
+    await dbRegistracionNET.raw(
       "EXEC SP_EditarCalidadProgramacion @Operacion_ID=:operacionId, @Lote_IDS=:loteIDS, @Sobrante=:sobrante, @Codigo=:codigo",
       parametrosParaSP
     );

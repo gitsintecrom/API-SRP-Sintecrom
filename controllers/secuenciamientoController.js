@@ -109,7 +109,7 @@
 
 // /src/controllers/secuenciamientoController.js (Versión Corregida y Final)
 
-const knex = require("../config/database"); // <-- Asegúrate de que esta ruta sea correcta
+const { dbRegistracionNET } = require("../config/database");// <-- Asegúrate de que esta ruta sea correcta
 
 /**
  * Obtiene las operaciones para una máquina, ENRIQUECIENDO cada fila
@@ -123,7 +123,7 @@ const getOperaciones = async (req, res) => {
 
   try {
     // 1. Obtenemos la lista principal de operaciones
-    const operaciones = await knex.raw("EXEC SP_TraerOperacionesPorMaquina @Maquina=?", [maquina]);
+    const operaciones = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesPorMaquina @Maquina=?", [maquina]);
 
     if (!operaciones || operaciones.length === 0) {
       return res.status(200).json([]);
@@ -140,7 +140,7 @@ const getOperaciones = async (req, res) => {
       }
       
       // Llamamos al SP para la operación anterior
-      const resultadoAnterior = await knex.raw("EXEC SP_TraerOperacionesAnteriores @Origen_Lote_ID=?", [op.Origen_Lote_ID]);
+      const resultadoAnterior = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesAnteriores @Origen_Lote_ID=?", [op.Origen_Lote_ID]);
       
       // El SP devuelve un array, tomamos el primer elemento si existe
       const operacionAnterior = resultadoAnterior[0];
@@ -172,7 +172,7 @@ const modificarSecuencia = async (req, res) => {
     return res.status(400).json({ error: "Faltan parámetros requeridos (operacionId, nuevaSecuencia, maquina)." });
   }
 
-  const trx = await knex.transaction(); 
+  const trx = await dbRegistracionNET.transaction(); 
 
   try {
     const todasLasOperaciones = await trx.raw("EXEC SP_TraerOperacionesPorMaquina @Maquina=?", [maquina]);

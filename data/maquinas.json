@@ -1,0 +1,12 @@
+    [
+      { "id": "SL1", "nombre": "Slitter 1", "color": "btn-info" },
+      { "id": "SL2", "nombre": "Slitter 2", "color": "btn-info" },
+      { "id": "SL3", "nombre": "Slitter 3", "color": "btn-info" },
+      { "id": "SL4", "nombre": "Slitter 4", "color": "btn-info" },
+      { "id": "PL1", "nombre": "Plancha 1", "color": "btn-warning" }, 
+      { "id": "PL2", "nombre": "Plancha 2", "color": "btn-warning" }, 
+      { "id": "PL3", "nombre": "Plancha 3", "color": "btn-warning" },
+      { "id": "PI", "nombre": "Pintura", "color": "btn-danger" }, 
+      { "id": "EMB", "nombre": "Embalaje", "color": "btn-danger" },
+      { "id": "HOR", "nombre": "Horno", "color": "btn-danger" }
+    ]

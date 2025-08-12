@@ -1,5 +1,6 @@
 // controllers/abastecimientoController.js
-const knex = require("../config/database");
+// const knex = require("../config/database");
+const { dbRegistracionNET } = require("../config/database");
 
 const getOperacionesPorMaquina = async (req, res) => {
   // Obtenemos el código de la máquina de los query params (ej. /api/abastecimiento?maquina=SL1)
@@ -11,7 +12,7 @@ const getOperacionesPorMaquina = async (req, res) => {
 
   try {
     // Llamamos al procedimiento almacenado
-    const operaciones = await knex.raw("EXEC SP_TraerOperacionesPorMaquina @Maquina=?", [maquina]);
+    const operaciones = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesPorMaquina @Maquina=?", [maquina]);
     
     // Knex con SQL Server devuelve el resultado en 'recordset'
     res.status(200).json(operaciones.recordset || operaciones);
@@ -30,7 +31,7 @@ const setAbastecida = async (req, res) => {
 
   try {
     // Ejecutamos el procedimiento almacenado pasando los parámetros
-    await knex.raw("EXEC SP_OperacionAbastecida @Operacion_ID=?, @Abastecida=?", [operacionId, estado]);
+    await dbRegistracionNET.raw("EXEC SP_OperacionAbastecida @Operacion_ID=?, @Abastecida=?", [operacionId, estado]);
     
     res.status(200).json({ message: `Operación ${operacionId} actualizada a estado ${estado}.` });
   } catch (error) {
@@ -47,7 +48,7 @@ const registrarPesada = async (req, res) => {
   }
 
   try {
-    await knex.raw("EXEC SP_InsertarKilosBalanza @Operacion_ID=?, @KilosBalanza=?", [operacionId, kilosBalanza]);
+    await dbRegistracionNET.raw("EXEC SP_InsertarKilosBalanza @Operacion_ID=?, @KilosBalanza=?", [operacionId, kilosBalanza]);
     res.status(200).json({ message: "Pesada registrada correctamente." });
   } catch (error) {
     console.error("Error al registrar pesada:", error);

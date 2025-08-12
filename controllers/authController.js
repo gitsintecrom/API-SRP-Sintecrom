@@ -4,7 +4,7 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 
-const knex = require("../config/database");
+const { dbRegistracionNET } = require("../config/database");
 
 const secretKey = process.env.JWT_SECRET || "your-secret-key";
 
@@ -12,7 +12,7 @@ exports.login = async (req, res) => {
   const { nombre, password } = req.body;
 
   try {
-    const user = await knex("UsuariosDB").where({ nombre }).first();
+    const user = await dbRegistracionNET("UsuariosDB").where({ nombre }).first();
     
     if (!user) {
       return res.status(401).json({ success: false, message: "Usuario o contraseña incorrectos" });
@@ -23,7 +23,7 @@ exports.login = async (req, res) => {
       return res.status(401).json({ success: false, message: "Usuario o contraseña incorrectos" });
     }
 
-    const permisos = await knex("RolPermiso")
+    const permisos = await dbRegistracionNET("RolPermiso")
       .join("Permisos", "RolPermiso.idPermiso", "=", "Permisos.idPermiso")
       .where({ idRol: user.idRol })
       .select("clave");
@@ -68,7 +68,7 @@ exports.verifySupervisor = async (req, res) => {
   }
 
   try {
-    const user = await knex("UsuariosDB").where({ nombre }).first();
+    const user = await dbRegistracionNET("UsuariosDB").where({ nombre }).first();
     if (!user) {
       return res.status(401).json({ success: false, message: "Credenciales incorrectas." });
     }

@@ -1,6 +1,6 @@
 // /src/controllers/paradasController.js (VERSIÓN FINAL COMPLETA CON MANEJO DE FECHAS CORREGIDO)
 
-const knex = require("../config/database");
+const { dbRegistracionNET } = require("../config/database");
 
 /**
  * Endpoint para obtener las paradas registradas según filtros.
@@ -14,7 +14,7 @@ const getParadas = async (req, res) => {
   }
 
   try {
-    const paradas = await knex.raw(
+    const paradas = await dbRegistracionNET.raw(
       "EXEC SP_TraerParadas @FechaDesde=:fechaDesde, @FechaHasta=:fechaHasta, @Cod_Maquina=:codMaquina",
       { fechaDesde, fechaHasta, codMaquina }
     );
@@ -58,7 +58,7 @@ const crearParadas = async (req, res) => {
     maquinasAProcesar = [codMaquina];
   }
 
-  const trx = await knex.transaction();
+  const trx = await dbRegistracionNET.transaction();
   try {
     let paradasCreadas = 0;
     for (const maquinaCodigo of maquinasAProcesar) {
@@ -123,7 +123,7 @@ const eliminarParada = async (req, res) => {
     return res.status(400).json({ error: "Se requiere el ID de la parada." });
   }
   try {
-    await knex.raw("EXEC SP_EliminarParadas @ID_Parada=:idParada", { idParada });
+    await dbRegistracionNET.raw("EXEC SP_EliminarParadas @ID_Parada=:idParada", { idParada });
     res.status(200).json({ message: "Parada eliminada correctamente." });
   } catch (error) {
     console.error("Error en eliminarParada:", error);
@@ -133,7 +133,7 @@ const eliminarParada = async (req, res) => {
 
 const getMaquinasCombo = async (req, res) => {
   try {
-    const maquinas = await knex.raw("SELECT Cod_Maquina as value, Descripcion as label FROM Maquinas WHERE Cod_Maquina <> 0 ORDER BY Cod_Maquina");
+    const maquinas = await dbRegistracionNET.raw("SELECT Cod_Maquina as value, Descripcion as label FROM Maquinas WHERE Cod_Maquina <> 0 ORDER BY Cod_Maquina");
     maquinas.unshift({ value: 0, label: 'TODAS' });
     res.status(200).json(maquinas);
   } catch (error) {
