@@ -378,6 +378,7 @@ const getDetalleOperacion = async (req, res) => {
     }
 };
 
+
 const getCalculo_cuchillas = async (req, res) => {
     const { cuchillas, espesor, ancho } = req.body;
     if (!cuchillas || espesor === undefined || ancho === undefined) {
@@ -684,6 +685,52 @@ const toggleSuspensionOperacion = async (req, res) => {
     }
 };
 
+const getNotasCalipso = async (req, res) => {
+    const { operacionId } = req.params;
+
+    if (!operacionId) {
+        return res.status(400).json({ error: "El ID de la operación es requerido." });
+    }
+
+    try {
+        // Obtener notas de diferentes fuentes en Calipso
+        const [notasMatchingResult] = await dbSintecromDesa.raw("EXEC SP_REG_TraerNotasMatchingCalipso @OperacionID=?", [operacionId]);
+        
+        // Primero, obtener el Origen_Lote_ID de la tabla OperacionesCalipso
+        const [operacionInfo] = await dbRegistracionNET.raw("SELECT Origen_Lote_ID FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
+        const loteId = operacionInfo ? operacionInfo.Origen_Lote_ID : null;
+
+        let notasVariasResult = null;
+        if (loteId) {
+            [notasVariasResult] = await dbSintecromDesa.raw("EXEC SP_REG_TraerNotasCalipso @LoteID=?", [loteId]);
+        }
+        
+        const [motivoBloqueoResult] = await dbSintecromDesa.raw("EXEC SP_REG_TraerMotivoBloqueo @Operacion_id=?", [operacionId]);
+
+        let allNotes = [];
+
+        if (notasMatchingResult && notasMatchingResult.NotasOperacion?.trim()) {
+            allNotes.push(`Notas de Matching: ${notasMatchingResult.NotasOperacion.trim()}`);
+        }
+        if (notasVariasResult && notasVariasResult.NotasCalidad?.trim()) {
+            allNotes.push(`Notas de Calidad: ${notasVariasResult.NotasCalidad.trim()}`);
+        }
+        if (notasVariasResult && notasVariasResult.NotasVarias?.trim()) {
+            allNotes.push(`Notas Varias: ${notasVariasResult.NotasVarias.trim()}`);
+        }
+        if (motivoBloqueoResult && motivoBloqueoResult.MOTIVOBLOQUEO?.trim()) {
+            allNotes.push(`Motivo de Bloqueo: ${motivoBloqueoResult.MOTIVOBLOQUEO.trim()}`);
+        }
+
+        const combinedNotes = allNotes.join('\n\n') || 'No hay notas de Calipso para esta operación.';
+
+        res.status(200).json({ notes: combinedNotes });
+
+    } catch (error) {
+        console.error(`Error en getNotasCalipso para Operacion_ID: ${operacionId}`, error);
+        res.status(500).json({ error: "No se pudieron cargar las notas de Calipso.", details: error.message });
+    }
+};
 
 module.exports = {
     getMaquinas,
@@ -694,5 +741,6 @@ module.exports = {
     getInspeccionData,
     getFichaTecnicaProductos,
     getFichaTecnicaDetalle,
-    toggleSuspensionOperacion
+    toggleSuspensionOperacion,
+    getNotasCalipso
 };

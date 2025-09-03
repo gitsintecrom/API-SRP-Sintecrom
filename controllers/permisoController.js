@@ -1,10 +1,11 @@
 // controllers/permisoController.js
-const knex = require("../config/database");
+// const knex = require("../config/database");
+const { dbRegistracionNET } = require("../config/database");
 
 // OBTENER TODOS LOS PERMISOS
 const getAllPermisos = async (req, res) => {
   try {
-    const permisos = await knex("Permisos").select("idPermiso as id", "nombre", "clave");
+    const permisos = await dbRegistracionNET("Permisos").select("idPermiso as id", "nombre", "clave");
     res.status(200).json(permisos);
   } catch (error) {
     console.error("Error al obtener permisos:", error);
@@ -23,13 +24,13 @@ const createPermiso = async (req, res) => {
     }
 
     // Comprobar si la clave ya existe (la clave debe ser única)
-    const existingKey = await knex("Permisos").where({ clave }).first();
+    const existingKey = await dbRegistracionNET("Permisos").where({ clave }).first();
     if (existingKey) {
       return res.status(409).json({ error: "La clave del permiso ya está en uso" });
     }
 
     // Insertar el nuevo permiso
-    const [newPermisoId] = await knex("Permisos")
+    const [newPermisoId] = await dbRegistracionNET("Permisos")
       .insert({
         nombre,
         clave,
@@ -37,7 +38,7 @@ const createPermiso = async (req, res) => {
       .returning('idPermiso');
       
     // Buscar y devolver el permiso recién creado
-    const newPermiso = await knex("Permisos")
+    const newPermiso = await dbRegistracionNET("Permisos")
       .select("idPermiso as id", "nombre", "clave")
       .where({ idPermiso: newPermisoId })
       .first();
@@ -54,7 +55,7 @@ const createPermiso = async (req, res) => {
 const getPermisoById = async (req, res) => {
   const { id } = req.params;
   try {
-    const permiso = await knex("Permisos")
+    const permiso = await dbRegistracionNET("Permisos")
       .select("idPermiso as id", "nombre", "clave")
       .where({ idPermiso: id })
       .first();
@@ -80,7 +81,7 @@ const updatePermiso = async (req, res) => {
     }
 
     // Comprobar si la nueva clave ya está en uso por OTRO permiso
-    const existingKey = await knex("Permisos")
+    const existingKey = await dbRegistracionNET("Permisos")
       .where({ clave })
       .andWhereNot({ idPermiso: id })
       .first();
@@ -89,7 +90,7 @@ const updatePermiso = async (req, res) => {
     }
 
     // Ejecutar la actualización
-    const updatedCount = await knex("Permisos")
+    const updatedCount = await dbRegistracionNET("Permisos")
       .where({ idPermiso: id })
       .update({ nombre, clave });
 
@@ -98,7 +99,7 @@ const updatePermiso = async (req, res) => {
     }
 
     // Devolver el permiso actualizado
-    const updatedPermiso = await knex("Permisos").select("idPermiso as id", "nombre", "clave").where({ idPermiso: id }).first();
+    const updatedPermiso = await dbRegistracionNET("Permisos").select("idPermiso as id", "nombre", "clave").where({ idPermiso: id }).first();
     res.status(200).json(updatedPermiso);
 
   } catch (error) {
@@ -112,7 +113,7 @@ const deletePermiso = async (req, res) => {
   const { id } = req.params;
   try {
     // Primero, verificar si el permiso está en uso en la tabla RolPermiso
-    const isInUse = await knex("RolPermiso").where({ idPermiso: id }).first();
+    const isInUse = await dbRegistracionNET("RolPermiso").where({ idPermiso: id }).first();
     if (isInUse) {
       return res.status(409).json({ // 409 Conflict
         error: "No se puede eliminar el permiso porque está asignado a uno o más roles."
@@ -120,7 +121,7 @@ const deletePermiso = async (req, res) => {
     }
 
     // Si no está en uso, proceder a eliminarlo
-    const deletedCount = await knex("Permisos").where({ idPermiso: id }).del();
+    const deletedCount = await dbRegistracionNET("Permisos").where({ idPermiso: id }).del();
     if (deletedCount === 0) {
       return res.status(404).json({ error: "Permiso no encontrado" });
     }
