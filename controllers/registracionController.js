@@ -93,45 +93,6 @@ const getMaquinas = (req, res) => {
     }
 };
 
-// const procesarOperaciones = async (req, res) => {
-//     const { operacionesData } = req.body;
-//     console.log("operacionesData", operacionesData);
-    
-//     if (!operacionesData || !Array.isArray(operacionesData) || operacionesData.length === 0) {
-//         return res.status(400).json({ error: "Se requiere un arreglo de datos de operaciones." });
-//     }
-
-//     const transaction = await dbRegistracionNET.transaction();
-//     try {
-//         // 1. Obtener el último número de multi-operación
-//         const result = await transaction.raw("EXEC SP_TraerUltimaMultiOperacion");
-//         const lastMultiOp = result[0]?.MaxNumeroMultiOperacion || 0;
-//         const nuevaMultiOp = lastMultiOp + 1;
-
-//         // 2. Recorrer cada operación seleccionada
-//         for (const opData of operacionesData) {
-//             // 3. Insertar en la tabla MultiOperacion
-//             await transaction.raw("EXEC SP_InsertarMultiOperacion @Operacion_ID=?, @NumeroMultiOperacion=?", [opData.id, nuevaMultiOp]);
-            
-//             // 4. Abrir la operación (cambiar su estado y asignar batch)
-//             // Asumo que el SP_AbrirOperacion ya cambia el Estado a '1'
-//             await transaction.raw("EXEC SP_AbrirOperacion @Operacion_ID=?, @Nro_Batch=?", [opData.id, opData.nroBatch]);
-//         }
-
-//         await transaction.commit();
-//         res.status(200).json({ 
-//             success: true, 
-//             message: "Operaciones procesadas con éxito.", 
-//             multiOperacionId: nuevaMultiOp 
-//         });
-
-//     } catch (error) {
-//         await transaction.rollback();
-//         console.error("Error al procesar operaciones:", error);
-//         res.status(500).json({ error: "Fallo al procesar las operaciones.", details: error.message });
-//     }
-// };
-
 const procesarOperaciones = async (req, res) => {
     const { operacionesData } = req.body;
     console.log("operacionesData", operacionesData);
@@ -237,12 +198,970 @@ const getOperaciones = async (req, res) => {
     }
 };
 
+// const getDetalleOperacion = async (req, res) => {
+//     const { operacionId } = req.params;
+//     try {
+//         const [opMaquinaInfo] = await dbRegistracionNET.raw("SELECT Maquina FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
+//         if (!opMaquinaInfo) return res.status(404).json({ error: "Operación no encontrada para determinar la máquina." });
+        
+//         const maquinaId = opMaquinaInfo.Maquina;
+//         const spName = (maquinaId === 'EMB') ? 'SP_TraerOperacionesPorMaquinaEmbalaje' : 'SP_TraerOperacionesPorMaquina';
+//         const todasLasOperaciones = await dbRegistracionNET.raw(`EXEC ${spName} @Maquina=?`, [maquinaId]);
+//         const operacionPrincipal = todasLasOperaciones.find(op => op.Operacion_ID === operacionId);
+
+//         if (!operacionPrincipal) {
+//             return res.status(404).json({ error: "Operación no encontrada en la lista de la máquina." });
+//         }
+        
+//         const [opAnteriorResult, calidadResult, multiOpResult] = await Promise.all([
+//             dbRegistracionNET.raw("EXEC SP_TraerOperacionesAnteriores @Origen_Lote_ID=?", [operacionPrincipal.Origen_Lote_ID]),
+//             dbRegistracionNET.raw("EXEC SP_TraerCalidadOperacion @Operacion_ID=?", [operacionPrincipal.Operacion_ID]),
+//             dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacion @Operacion_ID=?", [operacionPrincipal.Operacion_ID])
+//         ]);
+        
+//         const opAnterior = opAnteriorResult[0];
+//         const calidad = calidadResult[0];
+//         const isAbastecida = operacionPrincipal.Abastecida === '0';
+//         const hasStock = operacionPrincipal.Stock && parseFloat(operacionPrincipal.Stock) > 0;
+//         const opAnteriorStatusText = opAnterior ? (opAnterior.Estado === '2' ? 'OK' : 'PENDIENTE') : 'OK-R';
+//         const opAnteriorOk = opAnteriorStatusText !== 'PENDIENTE';
+//         const isSuspended = operacionPrincipal.Suspendida == 1;
+//         const isOpen = operacionPrincipal.Estado === '1';
+//         const hasQualityCheck = calidad !== undefined;
+//         const aCalidad = hasQualityCheck && calidad.Dictamen === 0;
+//         const aCalidadDictamen = hasQualityCheck && (calidad.Dictamen === 1 || calidad.Dictamen === 2);
+//         let isOutOfTolerance = false;
+//         const pesada = parseFloat(operacionPrincipal.Kilos_Balanza || 0);
+//         const stockValue = parseFloat(operacionPrincipal.Stock || 0);
+//         if (pesada > 0 && stockValue > 0) {
+//             const tolerancePercentage = (opAnteriorStatusText === 'OK-R') ? TOLERANCIA_OP_RAIZ : TOLERANCIA_OP_INTERMEDIA;
+//             let toleranceMargin = stockValue * tolerancePercentage;
+//             if (toleranceMargin < 1) toleranceMargin = 1;
+//             if (pesada > stockValue + toleranceMargin || pesada < stockValue - toleranceMargin) {
+//                 isOutOfTolerance = true;
+//             }
+//         }
+        
+//         let finalStatus;
+//         if (!hasStock || !isAbastecida || !opAnteriorOk) { finalStatus = 'BLOQUEADA'; }
+//         else if (isSuspended) { finalStatus = 'SUSPENDIDA'; }
+//         else if (isOpen && (aCalidad || aCalidadDictamen)) { finalStatus = aCalidad ? 'EN_CALIDAD' : 'CALIDAD_DICTAMINADA'; }
+//         else if (isOpen) { finalStatus = 'EN_PROCESO'; }
+//         else if (isOutOfTolerance) { finalStatus = 'TOLERANCIA_EXCEDIDA'; }
+//         else { finalStatus = 'LISTA'; }
+        
+//         const [transaccion] = await dbRegistracionNET.raw("SELECT Kilos_Balanza FROM Transacciones WHERE Operacion_ID = ?", [operacionId]);
+        
+//         let fichaTecnica = {};
+//         try {
+//             const fichaResultPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [operacionPrincipal.Origen_Lote_ID]);
+//             if (fichaResultPPP && fichaResultPPP.length > 0) {
+//                 const f = fichaResultPPP[0];
+//                 fichaTecnica = {
+//                     Familia: f.Material,
+//                     Aleacion: f.Aleacion,
+//                     Temple: f.Temple,
+//                     Espesor: f.Espesor,
+//                     PaisOrigen: f.PropioTercero,
+//                     Recubrimiento: f.Cobertura,
+//                     Calidad: f.Calidad,
+//                     Ancho: operacionPrincipal.Operacion_TotalAncho
+//                 };
+//             }
+//         } catch (e) {
+//             console.warn(`ADVERTENCIA: SP de Ficha Técnica falló. Error: ${e.message}`);
+//         }
+        
+//         const tieneMultiOp = multiOpResult.length > 0;
+//         const numeroMultiOperacion = tieneMultiOp ? multiOpResult[0].NumeroMultiOperacion : null;
+//         const operacionesInvolucradas = numeroMultiOperacion
+//             ? await dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacionporNumero @NumeroMultiOperacion=?", [numeroMultiOperacion])
+//             : [{ Operacion_ID: operacionId }];
+        
+//         let lineasFinales = [];
+//         let isFirst = true;
+//         for (const op of operacionesInvolucradas) {
+//             const cortes = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesARegistrar @Operacion_ID=?", [op.Operacion_ID]);
+//             for (const corte of cortes) {
+//                 const loteIdsParam = corte.Lote_IDS || '00000000-0000-0000-0000-000000000000';
+//                 const [datosGuardados] = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradas @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?", [op.Operacion_ID, loteIdsParam, 0]);
+//                 let atados = corte.CantidadPaquetes || 0;
+//                 let rollos = corte.CantidadRollos || 0;
+//                 if (isFirst) {
+//                     atados = 1; // Primer valor como 1
+//                     rollos = 1; // Primer valor como 1
+//                     isFirst = false;
+//                 } else {
+//                     atados = 0; // Otros valores como 0
+//                     rollos = 0; // Otros valores como 0
+//                 }
+//                 const linea = {
+//                     Ancho: (corte.OperacionS_TotalAncho || 0).toFixed(0),
+//                     Cuchillas: corte.Operacion_Cuchillas,
+//                     Tarea: corte.TareaDestino,
+//                     Destino: corte.Destino_Lote,
+//                     Atados: atados,
+//                     Rollos: rollos,
+//                     Programados: corte.KilosProgramadosS || 0,
+//                     SobreOrden: datosGuardados?.Kilos_Sobreorden || 0,
+//                     Calidad: datosGuardados?.Kilos_Calidad || 0,
+//                     TotAtados: datosGuardados?.Atados || 0,
+//                     TotRollos: datosGuardados?.Rollos || 0
+//                 };
+//                 lineasFinales.push(linea);
+//                 console.log(`Línea inicial - Operación: ${op.Operacion_ID}, Atados: ${linea.Atados}, Rollos: ${linea.Rollos}, TotAtados: ${linea.TotAtados}, TotRollos: ${linea.TotRollos}`);
+//             }
+//         }
+        
+//         const lineasAgrupadas = lineasFinales.reduce((acc, linea) => {
+//             const key = `${linea.Ancho}-${linea.Cuchillas}-${linea.Tarea}-${linea.Destino}`;
+//             if (!acc[key]) {
+//                 acc[key] = { ...linea };
+//                 console.log(`Nueva agrupación - Key: ${key}, Atados: ${linea.Atados}, Rollos: ${linea.Rollos}, TotAtados: ${linea.TotAtados}, TotRollos: ${linea.TotRollos}`);
+//             } else {
+//                 Object.keys(linea).forEach(keyName => {
+//                     if (keyName.match(/^(Programados|SobreOrden|Calidad|TotAtados|TotRollos)$/)) {
+//                         acc[key][keyName] = (acc[key][keyName] || 0) + (linea[keyName] || 0);
+//                     }
+//                 });
+//                 console.log(`Agrupación actualizada - Key: ${key}, Atados: ${acc[key].Atados}, Rollos: ${acc[key].Rollos}, TotAtados: ${acc[key].TotAtados}, TotRollos: ${acc[key].TotRollos}`);
+//             }
+//             return acc;
+//         }, {});
+        
+//         let tieneNotasCalipso = false;
+//         try {
+//             const [notasMatchingResult, notasVariasResult, motivoBloqueoResult] = await Promise.all([
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasMatchingCalipso @OperacionID=?", [operacionPrincipal.Operacion_ID]),
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasCalipso @LoteID=?", [operacionPrincipal.Origen_Lote_ID]),
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerMotivoBloqueo @Operacion_id=?", [operacionPrincipal.Operacion_ID])
+//             ]);
+//             if (notasMatchingResult[0]?.NotasOperacion?.trim() || notasVariasResult[0]?.NotasCalidad?.trim() || notasVariasResult[0]?.NotasVarias?.trim() || motivoBloqueoResult[0]?.MOTIVOBLOQUEO?.trim()) {
+//                 tieneNotasCalipso = true;
+//             }
+//         } catch (e) {
+//             console.warn(`ADVERTENCIA: Verificación de notas Calipso falló. Error: ${e.message}`);
+//         }
+        
+//         let tieneNotasSRP = false;
+//         try {
+//             const [notas1, notas2, notas3, notas4] = await Promise.all([
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasCalidadRegistracion @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasCalidadUltimaOperacion @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasHorno @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasTraccion @Operacion_ID=?", [operacionId])
+//             ]);
+//             const hayTexto = (r) => r && r.length > 0 && Object.values(r[0]).some(v => typeof v === 'string' && v.trim() !== '');
+//             if (hayTexto(notas1) || hayTexto(notas2) || hayTexto(notas3) || hayTexto(notas4)) {
+//                 tieneNotasSRP = true;
+//             }
+//         } catch (e) {
+//             console.warn(`ADVERTENCIA: Verificación de notas SRP falló. Error: ${e.message}`);
+//         }
+        
+//         const header = {
+//             Clientes: operacionPrincipal.Clientes,
+//             SerieLote: operacionPrincipal.Origen_Lote.split(' - ').slice(0, 2).join(' - '),
+//             Matching: operacionPrincipal.Nro_Matching,
+//             Batch: operacionPrincipal.NroBatch,
+//             ScrapProgramado: operacionPrincipal.KilosMermaE,
+//             Cuchillas: operacionPrincipal.Operacion_Cuchillas,
+//             Pasadas: operacionPrincipal.Pasadas_Origen,
+//             Diametro: operacionPrincipal.Diametro,
+//             Corona: operacionPrincipal.CoronaE,
+//             Stock: operacionPrincipal.Stock,
+//             KgsProgramados: operacionPrincipal.KilosProgramadosEntrantes,
+//             CantAtados: operacionPrincipal.CantidadPaquetes,
+//             CantRollos: operacionPrincipal.CantidadRollos,
+//             ...fichaTecnica,
+//             status: finalStatus,
+//             tieneNotasCalipso: tieneNotasCalipso,
+//             tieneNotasSRP: tieneNotasSRP,
+//             maquinaId: maquinaId,
+//             LoteID: operacionPrincipal.Origen_Lote_ID,
+//         };
+        
+//         const lineas = Object.values(lineasAgrupadas);
+//         console.log(`Líneas finales agrupadas:`, lineas.map(l => ({ Ancho: l.Ancho, Atados: l.Atados, Rollos: l.Rollos, TotAtados: l.TotAtados, TotRollos: l.TotRollos })));
+        
+//         const balance = {
+//             kgsEntrantes: transaccion ? transaccion.Kilos_Balanza : 0,
+//             programados: header.KgsProgramados,
+//             sobreOrden: lineas.reduce((sum, item) => sum + item.SobreOrden, 0),
+//             calidad: lineas.reduce((sum, item) => sum + item.Calidad, 0),
+//             sobrante: 0,
+//             scrap: 0,
+//         };
+//         balance.saldo = (balance.kgsEntrantes || 0) - balance.sobreOrden - balance.calidad;
+        
+//         res.status(200).json({ header, lineas, balance });
+
+//     } catch (error) {
+//         console.error(`\n===== ERROR CRÍTICO EN DETALLE OPERACIÓN =====\nID: ${operacionId}\n`, error);
+//         res.status(500).json({ error: "Error interno del servidor.", details: error.message });
+//     }
+// };
+
+
+
+
+
+
+
+
+
+
+
+// const getDetalleOperacion = async (req, res) => {
+//     const { operacionId } = req.params;
+//     try {
+//         // Paso 1: Obtener info de máquina y operación principal
+//         const [opMaquinaInfo] = await dbRegistracionNET.raw("SELECT Maquina FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
+//         if (!opMaquinaInfo) return res.status(404).json({ error: "Operación no encontrada para determinar la máquina." });
+        
+//         const maquinaId = opMaquinaInfo.Maquina;
+//         const spName = (maquinaId === 'EMB') ? 'SP_TraerOperacionesPorMaquinaEmbalaje' : 'SP_TraerOperacionesPorMaquina';
+//         const todasLasOperaciones = await dbRegistracionNET.raw(`EXEC ${spName} @Maquina=?`, [maquinaId]);
+//         const operacionPrincipal = todasLasOperaciones.find(op => op.Operacion_ID === operacionId);
+
+//         if (!operacionPrincipal) {
+//             return res.status(404).json({ error: "Operación no encontrada en la lista de la máquina." });
+//         }
+        
+//         // Paso 2: Obtener NumeroMultiOperacion y operaciones involucradas
+//         const [multiOpResult] = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacion @Operacion_ID=?", [operacionPrincipal.Operacion_ID]);
+//         const tieneMultiOp = multiOpResult && multiOpResult.length > 0;
+//         const numeroMultiOperacion = tieneMultiOp ? multiOpResult[0].NumeroMultiOperacion : null;
+//         const operacionesInvolucradas = numeroMultiOperacion
+//             ? await dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacionporNumero @NumeroMultiOperacion=?", [numeroMultiOperacion])
+//             : [{ Operacion_ID: operacionId }];
+
+//         // Paso 3: Status de la operación (replicado de getOperaciones)
+//         const [opAnteriorResult, calidadResult] = await Promise.all([
+//             dbRegistracionNET.raw("EXEC SP_TraerOperacionesAnteriores @Origen_Lote_ID=?", [operacionPrincipal.Origen_Lote_ID]),
+//             dbRegistracionNET.raw("EXEC SP_TraerCalidadOperacion @Operacion_ID=?", [operacionPrincipal.Operacion_ID])
+//         ]);
+        
+//         const opAnterior = opAnteriorResult[0];
+//         const calidad = calidadResult[0];
+//         const isAbastecida = operacionPrincipal.Abastecida === '0';
+//         const hasStock = operacionPrincipal.Stock && parseFloat(operacionPrincipal.Stock) > 0;
+//         const opAnteriorStatusText = opAnterior ? (opAnterior.Estado === '2' ? 'OK' : 'PENDIENTE') : 'OK-R';
+//         const opAnteriorOk = opAnteriorStatusText !== 'PENDIENTE';
+//         const isSuspended = operacionPrincipal.Suspendida == 1;
+//         const isOpen = operacionPrincipal.Estado === '1';
+//         const hasQualityCheck = calidad !== undefined;
+//         const aCalidad = hasQualityCheck && calidad.Dictamen === 0;
+//         const aCalidadDictamen = hasQualityCheck && (calidad.Dictamen === 1 || calidad.Dictamen === 2);
+//         let isOutOfTolerance = false;
+//         const pesada = parseFloat(operacionPrincipal.Kilos_Balanza || 0);
+//         const stockValue = parseFloat(operacionPrincipal.Stock || 0);
+//         if (pesada > 0 && stockValue > 0) {
+//             const tolerancePercentage = (opAnteriorStatusText === 'OK-R') ? TOLERANCIA_OP_RAIZ : TOLERANCIA_OP_INTERMEDIA;
+//             let toleranceMargin = stockValue * tolerancePercentage;
+//             if (toleranceMargin < 1) toleranceMargin = 1;
+//             if (pesada > stockValue + toleranceMargin || pesada < stockValue - toleranceMargin) {
+//                 isOutOfTolerance = true;
+//             }
+//         }
+        
+//         let finalStatus;
+//         if (!hasStock || !isAbastecida || !opAnteriorOk) { finalStatus = 'BLOQUEADA'; }
+//         else if (isSuspended) { finalStatus = 'SUSPENDIDA'; }
+//         else if (isOpen && (aCalidad || aCalidadDictamen)) { finalStatus = aCalidad ? 'EN_CALIDAD' : 'CALIDAD_DICTAMINADA'; }
+//         else if (isOpen) { finalStatus = 'EN_PROCESO'; }
+//         else if (isOutOfTolerance) { finalStatus = 'TOLERANCIA_EXCEDIDA'; }
+//         else { finalStatus = 'LISTA'; }
+
+//         // Paso 4: KgsEntrantes (dPesadaTot: primer Kilos_Balanza de la primera operación)
+//         let kgsEntrantes = 0;
+//         if (operacionesInvolucradas.length > 0) {
+//             const primerCorte = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesARegistrar @Operacion_ID=?", [operacionesInvolucradas[0].Operacion_ID]);
+//             if (primerCorte && primerCorte.length > 0) {
+//                 kgsEntrantes = parseFloat(primerCorte[0].Kilos_Balanza || 0);
+//             }
+//         }
+
+//         // Paso 5: Líneas Normales (replicando agrupación por operación y Ancho/DestinoLote)
+//         let lineasNormales = [];
+//         let totalProgramados = 0;
+//         let totalAtadosEntrantes = 0;
+//         let totalRollosEntrantes = 0;
+//         let totalMerma = 0; // Para Scrap Programado en header
+
+//         for (const op of operacionesInvolucradas) {
+//             const cortes = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesARegistrar @Operacion_ID=?", [op.Operacion_ID]);
+//             if (!cortes || cortes.length === 0) continue;
+
+//             // Sumar entrantes por operación (iCantAtadosEnt, iCantRollosEnt del primer corte)
+//             const primerCorte = cortes[0];
+//             const atadosEntrantes = primerCorte.CantidadPaquetes === 0 ? 1 : parseInt(primerCorte.CantidadPaquetes || 0);
+//             const rollosEntrantes = primerCorte.CantidadRollos === 0 ? 1 : parseInt(primerCorte.CantidadRollos || 0);
+//             totalAtadosEntrantes += atadosEntrantes;
+//             totalRollosEntrantes += rollosEntrantes;
+
+//             // Sumar merma por operación
+//             totalMerma += parseFloat(primerCorte.KilosMermaE || 0);
+
+//             // Agrupar cortes por Ancho y DestinoLote dentro de esta operación
+//             const grupos = {};
+//             let totalKgsActual = 0;
+//             let currentAncho = null;
+//             let currentDestino = null;
+//             let currentLoteIDS = null;
+//             let currentOperacionID = op.Operacion_ID;
+
+//             for (const corte of cortes) {
+//                 const ancho = parseFloat(corte.OperacionS_TotalAncho || 0).toFixed(2);
+//                 const destino = corte.Destino_Lote ? corte.Destino_Lote.substring(0, 11) : '';
+//                 const key = `${ancho}-${destino}`;
+
+//                 if (currentAncho !== null && (ancho !== currentAncho || destino !== currentDestino)) {
+//                     // Generar línea para el grupo anterior
+//                     const sobreOrden = 0; // Inicial, se obtendrá abajo
+//                     const calidad = 0;
+//                     const atadosProducidos = 0;
+//                     const rollosProducidos = 0;
+
+//                     // Obtener datos guardados para este grupo (usando Lote_IDS del primer corte del grupo)
+//                     const [datosGuardados] = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradas @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?", [currentOperacionID, currentLoteIDS, 0]);
+//                     if (datosGuardados) {
+//                         sobreOrden = parseFloat(datosGuardados.Kilos_Sobreorden || 0);
+//                         calidad = parseFloat(datosGuardados.Kilos_Calidad || 0);
+//                         atadosProducidos = parseInt(datosGuardados.Atados || 0);
+//                         rollosProducidos = parseInt(datosGuardados.Rollos || 0);
+//                     }
+
+//                     lineasNormales.push({
+//                         Ancho: currentAncho,
+//                         Cuchillas: primerCorte.Operacion_Cuchillas, // Del primer corte del grupo
+//                         Tarea: primerCorte.TareaDestino,
+//                         Destino: currentDestino,
+//                         AtadosEntrantes: atadosEntrantes, // Para descripción
+//                         RollosEntrantes: rollosEntrantes,
+//                         Programados: totalKgsActual,
+//                         SobreOrden: sobreOrden,
+//                         Calidad: calidad,
+//                         Atados: atadosProducidos, // Producidos para grilla
+//                         Rollos: rollosProducidos
+//                     });
+
+//                     totalProgramados += totalKgsActual;
+//                     totalKgsActual = 0;
+//                 }
+
+//                 // Acumular para nuevo grupo
+//                 currentAncho = ancho;
+//                 currentDestino = destino;
+//                 currentLoteIDS = corte.Lote_IDS || '00000000-0000-0000-0000-000000000000';
+//                 totalKgsActual += parseFloat(corte.KilosProgramadosS || 0);
+//             }
+
+//             // Último grupo de esta operación
+//             if (currentAncho !== null) {
+//                 const sobreOrden = 0;
+//                 const calidad = 0;
+//                 const atadosProducidos = 0;
+//                 const rollosProducidos = 0;
+
+//                 const [datosGuardados] = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradas @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?", [currentOperacionID, currentLoteIDS, 0]);
+//                 if (datosGuardados) {
+//                     sobreOrden = parseFloat(datosGuardados.Kilos_Sobreorden || 0);
+//                     calidad = parseFloat(datosGuardados.Kilos_Calidad || 0);
+//                     atadosProducidos = parseInt(datosGuardados.Atados || 0);
+//                     rollosProducidos = parseInt(datosGuardados.Rollos || 0);
+//                 }
+
+//                 lineasNormales.push({
+//                     Ancho: currentAncho,
+//                     Cuchillas: cortes[0].Operacion_Cuchillas,
+//                     Tarea: cortes[0].TareaDestino,
+//                     Destino: currentDestino,
+//                     AtadosEntrantes: atadosEntrantes,
+//                     RollosEntrantes: rollosEntrantes,
+//                     Programados: totalKgsActual,
+//                     SobreOrden: sobreOrden,
+//                     Calidad: calidad,
+//                     Atados: atadosProducidos,
+//                     Rollos: rollosProducidos
+//                 });
+
+//                 totalProgramados += totalKgsActual;
+//             }
+//         }
+
+//         // Paso 6: Filas Adicionales (Sobrante y Scrap) - Totales sumados de todas las operaciones
+//         let sobrante = { totalSobreOrden: 0, totalCalidad: 0, totalAtados: 0, totalRollos: 0 };
+//         let scrapSeriado = { totalSobreOrden: 0, totalCalidad: 0, totalAtados: 0, totalRollos: 0 };
+//         let scrapNoSeriado = { totalSobreOrden: 0, totalCalidad: 0, totalAtados: 0, totalRollos: 0 };
+
+//         for (const op of operacionesInvolucradas) {
+//             // Sobrante (Sobrante=1)
+//             const sobranteResult = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradasSobrante @Operacion_ID=?, @Sobrante=?", [op.Operacion_ID, 1]);
+//             if (sobranteResult && sobranteResult.length > 0) {
+//                 sobranteResult.forEach(item => {
+//                     sobrante.totalSobreOrden += parseFloat(item.Kilos_Sobreorden || 0);
+//                     sobrante.totalCalidad += parseFloat(item.Kilos_Calidad || 0);
+//                     sobrante.totalAtados += parseInt(item.Atados || 0);
+//                     sobrante.totalRollos += parseInt(item.Rollos || 0);
+//                 });
+//             }
+
+//             // Scrap (Sobrante=2)
+//             const scrapResult = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradasSobrante @Operacion_ID=?, @Sobrante=?", [op.Operacion_ID, 2]);
+//             if (scrapResult && scrapResult.length > 0) {
+//                 scrapResult.forEach(item => {
+//                     const esSeriado = item.RetornaStock !== 'Z'; // Asumiendo que 'Z' es no seriado
+//                     const target = esSeriado ? scrapSeriado : scrapNoSeriado;
+//                     target.totalSobreOrden += parseFloat(item.Kilos_Sobreorden || 0);
+//                     target.totalCalidad += parseFloat(item.Kilos_Calidad || 0);
+//                     target.totalAtados += parseInt(item.Atados || 0);
+//                     target.totalRollos += parseInt(item.Rollos || 0);
+//                 });
+//             }
+//         }
+
+//         // Paso 7: Ficha Técnica (lógica condicional exacta)
+//         let fichaTecnica = {};
+//         const codProdIntermedio = operacionPrincipal.Codigo_Producto || '';
+//         if (codProdIntermedio.substring(5, 7) === 'MP' || codProdIntermedio.substring(5, 7) === 'PT') {
+//             // Primero SP_TraerFichaTecnica
+//             const fichaResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+//             if (fichaResult && fichaResult.length > 0) {
+//                 const f = fichaResult[0];
+//                 fichaTecnica = {
+//                     Familia: f.Familia,
+//                     Aleacion: f.Aleacion,
+//                     Temple: f.Temple,
+//                     Espesor: `${f.Espesor}   Máx:${(parseFloat(f.EspesorMAX) + parseFloat(f.Espesor) / 1000).toFixed(3)} Mín:${(parseFloat(f.EspesorMIN) + parseFloat(f.Espesor) / 1000).toFixed(3)}`,
+//                     Calidad: f.CalidadOri,
+//                     PaisOrigen: f.Origen,
+//                     Recubrimiento: f.Recubrimiento
+//                 };
+//             } else {
+//                 // Fallback a SP_REG_TraerFichaTecnicaPPP
+//                 const fallbackResult = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @Lote_ID=?", [operacionPrincipal.Origen_Lote_ID]);
+//                 if (fallbackResult && fallbackResult.length > 0) {
+//                     const f = fallbackResult[0];
+//                     fichaTecnica = {
+//                         Familia: f.Material.substring(8, 10),
+//                         Aleacion: f.Aleacion,
+//                         Temple: f.Temple,
+//                         Espesor: parseFloat(f.Espesor).toFixed(3),
+//                         Calidad: f.Calidad,
+//                         PaisOrigen: f.PropioTercero,
+//                         Recubrimiento: f.Cobertura
+//                     };
+//                 }
+//             }
+//         } else {
+//             // Directo a SP_REG_TraerFichaTecnicaPPP
+//             const fichaResultPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @Lote_ID=?", [operacionPrincipal.Origen_Lote_ID]);
+//             if (fichaResultPPP && fichaResultPPP.length > 0) {
+//                 const f = fichaResultPPP[0];
+//                 fichaTecnica = {
+//                     Familia: f.Material,
+//                     Aleacion: f.Aleacion,
+//                     Temple: f.Temple,
+//                     Espesor: parseFloat(f.Espesor).toFixed(3),
+//                     Calidad: f.Calidad,
+//                     PaisOrigen: f.PropioTercero,
+//                     Recubrimiento: f.Cobertura
+//                 };
+//             } else {
+//                 // Fallback a SP_TraerFichaTecnica
+//                 const fallbackResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+//                 if (fallbackResult && fallbackResult.length > 0) {
+//                     const f = fallbackResult[0];
+//                     fichaTecnica = {
+//                         Familia: f.Familia,
+//                         Aleacion: f.Aleacion,
+//                         Temple: f.Temple,
+//                         Espesor: `${f.Espesor}   Máx:${(parseFloat(f.EspesorMAX) + parseFloat(f.Espesor) / 1000).toFixed(3)} Mín:${(parseFloat(f.EspesorMIN) + parseFloat(f.Espesor) / 1000).toFixed(3)}`,
+//                         Calidad: f.CalidadOri,
+//                         PaisOrigen: f.Origen,
+//                         Recubrimiento: f.Recubrimiento
+//                     };
+//                 }
+//             }
+//         }
+
+//         // Paso 8: TieneNotas (verificación exacta)
+//         let tieneNotasCalipso = false;
+//         try {
+//             const [notasMatching, notasVarias, motivoBloqueo] = await Promise.all([
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasMatchingCalipso @OperacionID=?", [operacionId]),
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasCalipso @LoteID=?", [operacionPrincipal.Origen_Lote_ID]),
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerMotivoBloqueo @Operacion_id=?", [operacionId])
+//             ]);
+//             const hasMatching = notasMatching[0]?.NotasOperacion?.trim();
+//             const hasCalidad = notasVarias[0]?.NotasCalidad?.trim();
+//             const hasVarias = notasVarias[0]?.NotasVarias?.trim();
+//             const hasBloqueo = motivoBloqueo[0]?.MotivoBloqueo?.trim();
+//             tieneNotasCalipso = !!(hasMatching || hasCalidad || hasVarias || hasBloqueo);
+//         } catch (e) {
+//             console.warn(`Error verificando notas Calipso: ${e.message}`);
+//         }
+
+//         let tieneNotasSRP = false;
+//         try {
+//             const [notas1, notas2, notas3, notas4] = await Promise.all([
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasCalidadRegistracion @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasCalidadUltimaOperacion @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasHorno @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasTraccion @Operacion_ID=?", [operacionId])
+//             ]);
+//             const hasText = (arr) => arr && arr.length > 0 && arr.some(item => 
+//                 Object.values(item).some(val => typeof val === 'string' && val.trim())
+//             );
+//             tieneNotasSRP = hasText(notas1) || hasText(notas2) || hasText(notas3) || hasText(notas4);
+//         } catch (e) {
+//             console.warn(`Error verificando notas SRP: ${e.message}`);
+//         }
+
+//         // Paso 9: Header
+//         const header = {
+//             Clientes: operacionPrincipal.Clientes || '',
+//             SerieLote: operacionPrincipal.Origen_Lote?.split(' - ').slice(0, 2).join(' - ') || '',
+//             Matching: operacionPrincipal.Nro_Matching || '',
+//             Batch: operacionPrincipal.NroBatch || '',
+//             ScrapProgramado: totalMerma.toFixed(2), // Suma de KilosMermaE
+//             Cuchillas: operacionPrincipal.Operacion_Cuchillas || '',
+//             Pasadas: operacionPrincipal.Pasadas_Origen || 1,
+//             Diametro: operacionPrincipal.Diametro || '',
+//             Corona: operacionPrincipal.CoronaE || '',
+//             Stock: parseFloat(operacionPrincipal.Stock || 0).toFixed(0),
+//             KgsProgramados: totalProgramados.toFixed(2),
+//             CantAtados: totalAtadosEntrantes,
+//             CantRollos: totalRollosEntrantes,
+//             ...fichaTecnica,
+//             status: finalStatus,
+//             tieneNotasCalipso,
+//             tieneNotasSRP,
+//             maquinaId,
+//             LoteID: operacionPrincipal.Origen_Lote_ID || ''
+//         };
+
+//         // Paso 10: Balance (incluyendo sobrante y scrap)
+//         const totSO = lineasNormales.reduce((sum, l) => sum + l.SobreOrden, 0);
+//         const totCalidad = lineasNormales.reduce((sum, l) => sum + l.Calidad, 0);
+//         const totSobraSO = sobrante.totalSobreOrden;
+//         const totSobraCa = sobrante.totalCalidad;
+//         const totScrapSO = scrapSeriado.totalSobreOrden + scrapNoSeriado.totalSobreOrden;
+//         const totScrapCa = scrapSeriado.totalCalidad + scrapNoSeriado.totalCalidad;
+
+//         const balance = {
+//             kgsEntrantes: kgsEntrantes,
+//             programados: totalProgramados,
+//             sobreOrden: totSO,
+//             calidad: totCalidad,
+//             sobrante: { totalSobreOrden: totSobraSO, totalCalidad: totSobraCa },
+//             scrapSeriado: { totalSobreOrden: scrapSeriado.totalSobreOrden, totalCalidad: scrapSeriado.totalCalidad },
+//             scrapNoSeriado: { totalSobreOrden: scrapNoSeriado.totalSobreOrden, totalCalidad: scrapNoSeriado.totalCalidad },
+//             scrap: { totalSobreOrden: totScrapSO, totalCalidad: totScrapCa },
+//             saldo: kgsEntrantes - (totSO + totCalidad + totSobraSO + totSobraCa + totScrapSO + totScrapCa)
+//         };
+
+//         res.status(200).json({ 
+//             header, 
+//             lineas: lineasNormales,  // Solo líneas normales; sobrante/scrap como totales en balance
+//             balance,
+//             sobrante,  // Objeto con totales para la fila
+//             scrapSeriado,
+//             scrapNoSeriado
+//         });
+
+//     } catch (error) {
+//         console.error(`Error en getDetalleOperacion para ${operacionId}:`, error);
+//         res.status(500).json({ error: "Error interno del servidor.", details: error.message });
+//     }
+// };
+
+
+
+
+
+
+
+
+// const getDetalleOperacion = async (req, res) => {
+//     const { operacionId } = req.params;
+//     try {
+//         // Paso 1: Obtener info de máquina y operación principal
+//         const [opMaquinaInfo] = await dbRegistracionNET.raw("SELECT Maquina FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
+//         if (!opMaquinaInfo) return res.status(404).json({ error: "Operación no encontrada para determinar la máquina." });
+        
+//         const maquinaId = opMaquinaInfo.Maquina;
+//         const spName = (maquinaId === 'EMB') ? 'SP_TraerOperacionesPorMaquinaEmbalaje' : 'SP_TraerOperacionesPorMaquina';
+//         const todasLasOperaciones = await dbRegistracionNET.raw(`EXEC ${spName} @Maquina=?`, [maquinaId]);
+//         const operacionPrincipal = todasLasOperaciones.find(op => op.Operacion_ID === operacionId);
+
+//         if (!operacionPrincipal) {
+//             return res.status(404).json({ error: "Operación no encontrada en la lista de la máquina." });
+//         }
+        
+//         // Paso 2: Obtener NumeroMultiOperacion y operaciones involucradas
+//         const [multiOpResult] = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacion @Operacion_ID=?", [operacionPrincipal.Operacion_ID]);
+//         const tieneMultiOp = multiOpResult && multiOpResult.length > 0;
+//         const numeroMultiOperacion = tieneMultiOp ? multiOpResult[0].NumeroMultiOperacion : null;
+//         const operacionesInvolucradas = numeroMultiOperacion
+//             ? await dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacionporNumero @NumeroMultiOperacion=?", [numeroMultiOperacion])
+//             : [{ Operacion_ID: operacionId }];
+
+//         // Paso 3: Status de la operación (replicado de getOperaciones)
+//         const [opAnteriorResult, calidadResult] = await Promise.all([
+//             dbRegistracionNET.raw("EXEC SP_TraerOperacionesAnteriores @Origen_Lote_ID=?", [operacionPrincipal.Origen_Lote_ID]),
+//             dbRegistracionNET.raw("EXEC SP_TraerCalidadOperacion @Operacion_ID=?", [operacionPrincipal.Operacion_ID])
+//         ]);
+        
+//         const opAnterior = opAnteriorResult[0];
+//         const calidad = calidadResult[0];
+//         const isAbastecida = operacionPrincipal.Abastecida === '0';
+//         const hasStock = operacionPrincipal.Stock && parseFloat(operacionPrincipal.Stock) > 0;
+//         const opAnteriorStatusText = opAnterior ? (opAnterior.Estado === '2' ? 'OK' : 'PENDIENTE') : 'OK-R';
+//         const opAnteriorOk = opAnteriorStatusText !== 'PENDIENTE';
+//         const isSuspended = operacionPrincipal.Suspendida == 1;
+//         const isOpen = operacionPrincipal.Estado === '1';
+//         const hasQualityCheck = calidad !== undefined;
+//         const aCalidad = hasQualityCheck && calidad.Dictamen === 0;
+//         const aCalidadDictamen = hasQualityCheck && (calidad.Dictamen === 1 || calidad.Dictamen === 2);
+//         let isOutOfTolerance = false;
+//         const pesada = parseFloat(operacionPrincipal.Kilos_Balanza || 0);
+//         const stockValue = parseFloat(operacionPrincipal.Stock || 0);
+//         if (pesada > 0 && stockValue > 0) {
+//             const tolerancePercentage = (opAnteriorStatusText === 'OK-R') ? TOLERANCIA_OP_RAIZ : TOLERANCIA_OP_INTERMEDIA;
+//             let toleranceMargin = stockValue * tolerancePercentage;
+//             if (toleranceMargin < 1) toleranceMargin = 1;
+//             if (pesada > stockValue + toleranceMargin || pesada < stockValue - toleranceMargin) {
+//                 isOutOfTolerance = true;
+//             }
+//         }
+        
+//         let finalStatus;
+//         if (!hasStock || !isAbastecida || !opAnteriorOk) { finalStatus = 'BLOQUEADA'; }
+//         else if (isSuspended) { finalStatus = 'SUSPENDIDA'; }
+//         else if (isOpen && (aCalidad || aCalidadDictamen)) { finalStatus = aCalidad ? 'EN_CALIDAD' : 'CALIDAD_DICTAMINADA'; }
+//         else if (isOpen) { finalStatus = 'EN_PROCESO'; }
+//         else if (isOutOfTolerance) { finalStatus = 'TOLERANCIA_EXCEDIDA'; }
+//         else { finalStatus = 'LISTA'; }
+
+//         // Paso 4: KgsEntrantes (dPesadaTot: primer Kilos_Balanza de la primera operación)
+//         let kgsEntrantes = 0;
+//         if (operacionesInvolucradas.length > 0) {
+//             const primerCorte = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesARegistrar @Operacion_ID=?", [operacionesInvolucradas[0].Operacion_ID]);
+//             if (primerCorte && primerCorte.length > 0) {
+//                 kgsEntrantes = parseFloat(primerCorte[0].Kilos_Balanza || 0);
+//             }
+//         }
+
+//         // Paso 5: Líneas Normales (replicando agrupación por operación y Ancho/DestinoLote)
+//         let lineasNormales = [];
+//         let totalProgramados = 0;
+//         let totalAtadosEntrantes = 0;
+//         let totalRollosEntrantes = 0;
+//         let totalMerma = 0; // Para Scrap Programado en header
+
+//         for (const op of operacionesInvolucradas) {
+//             const cortes = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesARegistrar @Operacion_ID=?", [op.Operacion_ID]);
+//             if (!cortes || cortes.length === 0) continue;
+
+//             // Sumar entrantes por operación (iCantAtadosEnt, iCantRollosEnt del primer corte)
+//             const primerCorte = cortes[0];
+//             const atadosEntrantes = primerCorte.CantidadPaquetes === 0 ? 1 : parseInt(primerCorte.CantidadPaquetes || 0);
+//             const rollosEntrantes = primerCorte.CantidadRollos === 0 ? 1 : parseInt(primerCorte.CantidadRollos || 0);
+//             totalAtadosEntrantes += atadosEntrantes;
+//             totalRollosEntrantes += rollosEntrantes;
+
+//             // Sumar merma por operación
+//             totalMerma += parseFloat(primerCorte.KilosMermaE || 0);
+
+//             // Agrupar cortes por Ancho y DestinoLote dentro de esta operación
+//             const grupos = {};
+//             let totalKgsActual = 0;
+//             let currentAncho = null;
+//             let currentDestino = null;
+//             let currentLoteIDS = null;
+//             let currentOperacionID = op.Operacion_ID;
+
+//             for (const corte of cortes) {
+//                 const ancho = parseFloat(corte.OperacionS_TotalAncho || 0).toFixed(2);
+//                 const destino = corte.Destino_Lote ? corte.Destino_Lote.substring(0, 11) : '';
+//                 const key = `${ancho}-${destino}`;
+
+//                 if (currentAncho !== null && (ancho !== currentAncho || destino !== currentDestino)) {
+//                     // Generar línea para el grupo anterior
+//                     const sobreOrden = 0; // Inicial, se obtendrá abajo
+//                     const calidad = 0;
+//                     const atadosProducidos = 0;
+//                     const rollosProducidos = 0;
+
+//                     // Obtener datos guardados para este grupo (usando Lote_IDS del primer corte del grupo)
+//                     const [datosGuardados] = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradas @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?", [currentOperacionID, currentLoteIDS, 0]);
+//                     if (datosGuardados) {
+//                         sobreOrden = parseFloat(datosGuardados.Kilos_Sobreorden || 0);
+//                         calidad = parseFloat(datosGuardados.Kilos_Calidad || 0);
+//                         atadosProducidos = parseInt(datosGuardados.Atados || 0);
+//                         rollosProducidos = parseInt(datosGuardados.Rollos || 0);
+//                     }
+
+//                     lineasNormales.push({
+//                         Ancho: currentAncho,
+//                         Cuchillas: primerCorte.Operacion_Cuchillas, // Del primer corte del grupo
+//                         Tarea: primerCorte.TareaDestino,
+//                         Destino: currentDestino,
+//                         AtadosEntrantes: atadosEntrantes, // Para descripción
+//                         RollosEntrantes: rollosEntrantes,
+//                         Programados: totalKgsActual,
+//                         SobreOrden: sobreOrden,
+//                         Calidad: calidad,
+//                         Atados: atadosProducidos, // Producidos para grilla
+//                         Rollos: rollosProducidos
+//                     });
+
+//                     totalProgramados += totalKgsActual;
+//                     totalKgsActual = 0;
+//                 }
+
+//                 // Acumular para nuevo grupo
+//                 currentAncho = ancho;
+//                 currentDestino = destino;
+//                 currentLoteIDS = corte.Lote_IDS || '00000000-0000-0000-0000-000000000000';
+//                 totalKgsActual += parseFloat(corte.KilosProgramadosS || 0);
+//             }
+
+//             // Último grupo de esta operación
+//             if (currentAncho !== null) {
+//                 const sobreOrden = 0;
+//                 const calidad = 0;
+//                 const atadosProducidos = 0;
+//                 const rollosProducidos = 0;
+
+//                 const [datosGuardados] = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradas @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?", [currentOperacionID, currentLoteIDS, 0]);
+//                 if (datosGuardados) {
+//                     sobreOrden = parseFloat(datosGuardados.Kilos_Sobreorden || 0);
+//                     calidad = parseFloat(datosGuardados.Kilos_Calidad || 0);
+//                     atadosProducidos = parseInt(datosGuardados.Atados || 0);
+//                     rollosProducidos = parseInt(datosGuardados.Rollos || 0);
+//                 }
+
+//                 lineasNormales.push({
+//                     Ancho: currentAncho,
+//                     Cuchillas: cortes[0].Operacion_Cuchillas,
+//                     Tarea: cortes[0].TareaDestino,
+//                     Destino: currentDestino,
+//                     AtadosEntrantes: atadosEntrantes,
+//                     RollosEntrantes: rollosEntrantes,
+//                     Programados: totalKgsActual,
+//                     SobreOrden: sobreOrden,
+//                     Calidad: calidad,
+//                     Atados: atadosProducidos,
+//                     Rollos: rollosProducidos
+//                 });
+
+//                 totalProgramados += totalKgsActual;
+//             }
+//         }
+
+//         // Paso 6: Filas Adicionales (Sobrante y Scrap) - Totales sumados de todas las operaciones
+//         let sobrante = { totalSobreOrden: 0, totalCalidad: 0, totalAtados: 0, totalRollos: 0 };
+//         let scrapSeriado = { totalSobreOrden: 0, totalCalidad: 0, totalAtados: 0, totalRollos: 0 };
+//         let scrapNoSeriado = { totalSobreOrden: 0, totalCalidad: 0, totalAtados: 0, totalRollos: 0 };
+
+//         for (const op of operacionesInvolucradas) {
+//             // Sobrante (Sobrante=1)
+//             const sobranteResult = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradasSobrante @Operacion_ID=?, @Sobrante=?", [op.Operacion_ID, 1]);
+//             if (sobranteResult && sobranteResult.length > 0) {
+//                 sobranteResult.forEach(item => {
+//                     sobrante.totalSobreOrden += parseFloat(item.Kilos_Sobreorden || 0);
+//                     sobrante.totalCalidad += parseFloat(item.Kilos_Calidad || 0);
+//                     sobrante.totalAtados += parseInt(item.Atados || 0);
+//                     sobrante.totalRollos += parseInt(item.Rollos || 0);
+//                 });
+//             }
+
+//             // Scrap (Sobrante=2)
+//             const scrapResult = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradasSobrante @Operacion_ID=?, @Sobrante=?", [op.Operacion_ID, 2]);
+//             if (scrapResult && scrapResult.length > 0) {
+//                 scrapResult.forEach(item => {
+//                     const esSeriado = item.RetornaStock !== 'Z'; // Asumiendo que 'Z' es no seriado
+//                     const target = esSeriado ? scrapSeriado : scrapNoSeriado;
+//                     target.totalSobreOrden += parseFloat(item.Kilos_Sobreorden || 0);
+//                     target.totalCalidad += parseFloat(item.Kilos_Calidad || 0);
+//                     target.totalAtados += parseInt(item.Atados || 0);
+//                     target.totalRollos += parseInt(item.Rollos || 0);
+//                 });
+//             }
+//         }
+
+//         // Paso 7: Ficha Técnica (lógica condicional exacta)
+//         let fichaTecnica = {};
+//         const codProdIntermedio = operacionPrincipal.Codigo_Producto || '';
+//         if (codProdIntermedio.substring(5, 7) === 'MP' || codProdIntermedio.substring(5, 7) === 'PT') {
+//             // Primero SP_TraerFichaTecnica
+//             const fichaResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+//             if (fichaResult && fichaResult.length > 0) {
+//                 const f = fichaResult[0];
+//                 fichaTecnica = {
+//                     Familia: f.Familia,
+//                     Aleacion: f.Aleacion,
+//                     Temple: f.Temple,
+//                     Espesor: `${f.Espesor}   Máx:${(parseFloat(f.EspesorMAX) + parseFloat(f.Espesor) / 1000).toFixed(3)} Mín:${(parseFloat(f.EspesorMIN) + parseFloat(f.Espesor) / 1000).toFixed(3)}`,
+//                     Calidad: f.CalidadOri,
+//                     PaisOrigen: f.Origen,
+//                     Recubrimiento: f.Recubrimiento
+//                 };
+//             } else {
+//                 // Fallback a SP_REG_TraerFichaTecnicaPPP
+//                 const fallbackResult = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @Lote_ID=?", [operacionPrincipal.Origen_Lote_ID]);
+//                 if (fallbackResult && fallbackResult.length > 0) {
+//                     const f = fallbackResult[0];
+//                     fichaTecnica = {
+//                         Familia: f.Material.substring(8, 10),
+//                         Aleacion: f.Aleacion,
+//                         Temple: f.Temple,
+//                         Espesor: parseFloat(f.Espesor).toFixed(3),
+//                         Calidad: f.Calidad,
+//                         PaisOrigen: f.PropioTercero,
+//                         Recubrimiento: f.Cobertura
+//                     };
+//                 }
+//             }
+//         } else {
+//             // Directo a SP_REG_TraerFichaTecnicaPPP
+//             const fichaResultPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @Lote_ID=?", [operacionPrincipal.Origen_Lote_ID]);
+//             if (fichaResultPPP && fichaResultPPP.length > 0) {
+//                 const f = fichaResultPPP[0];
+//                 fichaTecnica = {
+//                     Familia: f.Material,
+//                     Aleacion: f.Aleacion,
+//                     Temple: f.Temple,
+//                     Espesor: parseFloat(f.Espesor).toFixed(3),
+//                     Calidad: f.Calidad,
+//                     PaisOrigen: f.PropioTercero,
+//                     Recubrimiento: f.Cobertura
+//                 };
+//             } else {
+//                 // Fallback a SP_TraerFichaTecnica
+//                 const fallbackResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+//                 if (fallbackResult && fallbackResult.length > 0) {
+//                     const f = fallbackResult[0];
+//                     fichaTecnica = {
+//                         Familia: f.Familia,
+//                         Aleacion: f.Aleacion,
+//                         Temple: f.Temple,
+//                         Espesor: `${f.Espesor}   Máx:${(parseFloat(f.EspesorMAX) + parseFloat(f.Espesor) / 1000).toFixed(3)} Mín:${(parseFloat(f.EspesorMIN) + parseFloat(f.Espesor) / 1000).toFixed(3)}`,
+//                         Calidad: f.CalidadOri,
+//                         PaisOrigen: f.Origen,
+//                         Recubrimiento: f.Recubrimiento
+//                     };
+//                 }
+//             }
+//         }
+
+//         // Paso 8: TieneNotas (verificación exacta)
+//         let tieneNotasCalipso = false;
+//         try {
+//             const [notasMatching, notasVarias, motivoBloqueo] = await Promise.all([
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasMatchingCalipso @OperacionID=?", [operacionId]),
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasCalipso @LoteID=?", [operacionPrincipal.Origen_Lote_ID]),
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerMotivoBloqueo @Operacion_id=?", [operacionId])
+//             ]);
+//             const hasMatching = notasMatching[0]?.NotasOperacion?.trim();
+//             const hasCalidad = notasVarias[0]?.NotasCalidad?.trim();
+//             const hasVarias = notasVarias[0]?.NotasVarias?.trim();
+//             const hasBloqueo = motivoBloqueo[0]?.MotivoBloqueo?.trim();
+//             tieneNotasCalipso = !!(hasMatching || hasCalidad || hasVarias || hasBloqueo);
+//         } catch (e) {
+//             console.warn(`Error verificando notas Calipso: ${e.message}`);
+//         }
+
+//         let tieneNotasSRP = false;
+//         try {
+//             const [notas1, notas2, notas3, notas4] = await Promise.all([
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasCalidadRegistracion @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasCalidadUltimaOperacion @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasHorno @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasTraccion @Operacion_ID=?", [operacionId])
+//             ]);
+//             const hasText = (arr) => arr && arr.length > 0 && arr.some(item => 
+//                 Object.values(item).some(val => typeof val === 'string' && val.trim())
+//             );
+//             tieneNotasSRP = hasText(notas1) || hasText(notas2) || hasText(notas3) || hasText(notas4);
+//         } catch (e) {
+//             console.warn(`Error verificando notas SRP: ${e.message}`);
+//         }
+
+//         // Paso 9: Header
+//         const header = {
+//             Clientes: operacionPrincipal.Clientes || '',
+//             SerieLote: operacionPrincipal.Origen_Lote?.split(' - ').slice(0, 2).join(' - ') || '',
+//             Matching: operacionPrincipal.Nro_Matching || '',
+//             Batch: operacionPrincipal.NroBatch || '',
+//             ScrapProgramado: totalMerma.toFixed(2),
+//             Cuchillas: operacionPrincipal.Operacion_Cuchillas || '',
+//             Pasadas: operacionPrincipal.Pasadas_Origen || 1,
+//             Diametro: operacionPrincipal.Diametro || '',
+//             Corona: operacionPrincipal.CoronaE || '',
+//             Stock: parseFloat(operacionPrincipal.Stock || 0).toFixed(0),
+//             KgsProgramados: totalProgramados.toFixed(2),
+//             CantAtados: totalAtadosEntrantes,
+//             CantRollos: totalRollosEntrantes,
+//             ...fichaTecnica,
+//             status: finalStatus,
+//             tieneNotasCalipso,
+//             tieneNotasSRP,
+//             maquinaId,
+//             LoteID: operacionPrincipal.Origen_Lote_ID || ''
+//         };
+
+//         // Paso 10: Balance (usando let para variables mutables)
+//         let totSO = lineasNormales.reduce((sum, l) => sum + l.SobreOrden, 0);
+//         let totCalidad = lineasNormales.reduce((sum, l) => sum + l.Calidad, 0);
+//         let totSobraSO = sobrante.totalSobreOrden;
+//         let totSobraCa = sobrante.totalCalidad;
+//         let totScrapSO = scrapSeriado.totalSobreOrden + scrapNoSeriado.totalSobreOrden;
+//         let totScrapCa = scrapSeriado.totalCalidad + scrapNoSeriado.totalCalidad;
+
+//         const balance = {
+//             kgsEntrantes: kgsEntrantes,
+//             programados: totalProgramados,
+//             sobreOrden: totSO,
+//             calidad: totCalidad,
+//             sobrante: { totalSobreOrden: totSobraSO, totalCalidad: totSobraCa },
+//             scrapSeriado: { totalSobreOrden: scrapSeriado.totalSobreOrden, totalCalidad: scrapSeriado.totalCalidad },
+//             scrapNoSeriado: { totalSobreOrden: scrapNoSeriado.totalSobreOrden, totalCalidad: scrapNoSeriado.totalCalidad },
+//             scrap: { totalSobreOrden: totScrapSO, totalCalidad: totScrapCa },
+//             saldo: kgsEntrantes - (totSO + totCalidad + totSobraSO + totSobraCa + totScrapSO + totScrapCa)
+//         };
+
+//         res.status(200).json({ 
+//             header, 
+//             lineas: lineasNormales,
+//             balance,
+//             sobrante,
+//             scrapSeriado,
+//             scrapNoSeriado
+//         });
+
+//     } catch (error) {
+//         console.error(`Error en getDetalleOperacion para ${operacionId}:`, error);
+//         res.status(500).json({ error: "Error interno del servidor.", details: error.message });
+//     }
+// };
+
+
+
+
+
+
+
+
 const getDetalleOperacion = async (req, res) => {
     const { operacionId } = req.params;
     try {
         const [opMaquinaInfo] = await dbRegistracionNET.raw("SELECT Maquina FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
         if (!opMaquinaInfo) return res.status(404).json({ error: "Operación no encontrada para determinar la máquina." });
-        
+
         const maquinaId = opMaquinaInfo.Maquina;
         const spName = (maquinaId === 'EMB') ? 'SP_TraerOperacionesPorMaquinaEmbalaje' : 'SP_TraerOperacionesPorMaquina';
         const todasLasOperaciones = await dbRegistracionNET.raw(`EXEC ${spName} @Maquina=?`, [maquinaId]);
@@ -251,13 +1170,13 @@ const getDetalleOperacion = async (req, res) => {
         if (!operacionPrincipal) {
             return res.status(404).json({ error: "Operación no encontrada en la lista de la máquina." });
         }
-        
+
         const [opAnteriorResult, calidadResult, multiOpResult] = await Promise.all([
             dbRegistracionNET.raw("EXEC SP_TraerOperacionesAnteriores @Origen_Lote_ID=?", [operacionPrincipal.Origen_Lote_ID]),
             dbRegistracionNET.raw("EXEC SP_TraerCalidadOperacion @Operacion_ID=?", [operacionPrincipal.Operacion_ID]),
             dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacion @Operacion_ID=?", [operacionPrincipal.Operacion_ID])
         ]);
-        
+
         const opAnterior = opAnteriorResult[0];
         const calidad = calidadResult[0];
         const isAbastecida = operacionPrincipal.Abastecida === '0';
@@ -276,10 +1195,11 @@ const getDetalleOperacion = async (req, res) => {
             const tolerancePercentage = (opAnteriorStatusText === 'OK-R') ? TOLERANCIA_OP_RAIZ : TOLERANCIA_OP_INTERMEDIA;
             let toleranceMargin = stockValue * tolerancePercentage;
             if (toleranceMargin < 1) toleranceMargin = 1;
-            if (pesada > stockValue + toleranceMargin || pesada < stockValue - toleranceMargin) { isOutOfTolerance = true; }
+            if (pesada > stockValue + toleranceMargin || pesada < stockValue - toleranceMargin) {
+                isOutOfTolerance = true;
+            }
         }
-        
-        // ===== LÓGICA DE ESTADO RESTAURADA Y CORREGIDA =====
+
         let finalStatus;
         if (!hasStock || !isAbastecida || !opAnteriorOk) { finalStatus = 'BLOQUEADA'; }
         else if (isSuspended) { finalStatus = 'SUSPENDIDA'; }
@@ -287,42 +1207,82 @@ const getDetalleOperacion = async (req, res) => {
         else if (isOpen) { finalStatus = 'EN_PROCESO'; }
         else if (isOutOfTolerance) { finalStatus = 'TOLERANCIA_EXCEDIDA'; }
         else { finalStatus = 'LISTA'; }
-        
+
         const [transaccion] = await dbRegistracionNET.raw("SELECT Kilos_Balanza FROM Transacciones WHERE Operacion_ID = ?", [operacionId]);
-        
+
         let fichaTecnica = {};
         try {
             const fichaResultPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [operacionPrincipal.Origen_Lote_ID]);
             if (fichaResultPPP && fichaResultPPP.length > 0) {
                 const f = fichaResultPPP[0];
-                fichaTecnica = { Familia: f.Material, Aleacion: f.Aleacion, Temple: f.Temple, Espesor: f.Espesor, PaisOrigen: f.PropioTercero, Recubrimiento: f.Cobertura, Calidad: f.Calidad, Ancho: operacionPrincipal.Operacion_TotalAncho };
+                fichaTecnica = {
+                    Familia: f.Material,
+                    Aleacion: f.Aleacion,
+                    Temple: f.Temple,
+                    Espesor: f.Espesor,
+                    PaisOrigen: f.PropioTercero,
+                    Recubrimiento: f.Cobertura,
+                    Calidad: f.Calidad,
+                    Ancho: operacionPrincipal.Operacion_TotalAncho
+                };
             }
-        } catch (e) { console.warn(`ADVERTENCIA: SP de Ficha Técnica falló. Error: ${e.message}`); }
-        
+        } catch (e) {
+            console.warn(`ADVERTENCIA: SP de Ficha Técnica falló. Error: ${e.message}`);
+        }
+
         const tieneMultiOp = multiOpResult.length > 0;
         const numeroMultiOperacion = tieneMultiOp ? multiOpResult[0].NumeroMultiOperacion : null;
-        const operacionesInvolucradas = numeroMultiOperacion ? await dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacionporNumero @NumeroMultiOperacion=?", [numeroMultiOperacion]) : [{ Operacion_ID: operacionId }];
-        
+        const operacionesInvolucradas = numeroMultiOperacion
+            ? await dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacionporNumero @NumeroMultiOperacion=?", [numeroMultiOperacion])
+            : [{ Operacion_ID: operacionId }];
+
         let lineasFinales = [];
+        let totalMerma = 0;
+        let totalAtadosEntrantes = operacionPrincipal.CantidadPaquetes || 0;
+        let totalRollosEntrantes = operacionPrincipal.CantidadRollos || 0;
         for (const op of operacionesInvolucradas) {
             const cortes = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesARegistrar @Operacion_ID=?", [op.Operacion_ID]);
             for (const corte of cortes) {
                 const loteIdsParam = corte.Lote_IDS || '00000000-0000-0000-0000-000000000000';
                 const [datosGuardados] = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradas @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?", [op.Operacion_ID, loteIdsParam, 0]);
-                lineasFinales.push({ Ancho: (corte.OperacionS_TotalAncho || 0).toFixed(0), Cuchillas: corte.Operacion_Cuchillas, Tarea: corte.TareaDestino, Destino: corte.Destino_Lote, Atados: corte.CantidadPaquetes, Rollos: corte.CantidadRollos, Programados: corte.KilosProgramadosS || 0, SobreOrden: datosGuardados?.Kilos_Sobreorden || 0, Calidad: datosGuardados?.Kilos_Calidad || 0, TotAtados: datosGuardados?.Atados || 0, TotRollos: datosGuardados?.Rollos || 0 });
+                totalMerma += parseFloat(corte.KilosMermaE || 0);
+                const linea = {
+                    Ancho: (corte.OperacionS_TotalAncho || 0).toFixed(0),
+                    Cuchillas: corte.Operacion_Cuchillas,
+                    Tarea: corte.TareaDestino,
+                    Destino: corte.Destino_Lote,
+                    Atados: totalAtadosEntrantes > 0 ? 1 : 0,
+                    Rollos: totalRollosEntrantes > 0 ? 1 : 0,
+                    Programados: parseFloat(corte.KilosProgramadosS || 0),
+                    SobreOrden: datosGuardados?.Kilos_Sobreorden || 0,
+                    Calidad: datosGuardados?.Kilos_Calidad || 0,
+                    TotAtados: datosGuardados?.Atados || 0,
+                    TotRollos: datosGuardados?.Rollos || 0
+                };
+                lineasFinales.push(linea);
+                console.log(`Línea inicial - Operación: ${op.Operacion_ID}, Atados: ${linea.Atados}, Rollos: ${linea.Rollos}, TotAtados: ${linea.TotAtados}, TotRollos: ${linea.TotRollos}`);
             }
         }
-        
+
         const lineasAgrupadas = lineasFinales.reduce((acc, linea) => {
             const key = `${linea.Ancho}-${linea.Cuchillas}-${linea.Tarea}-${linea.Destino}`;
-            if (!acc[key]) { acc[key] = { ...linea }; }
-            else { Object.keys(linea).forEach(keyName => keyName.match(/^(Programados|SobreOrden|Calidad|TotAtados|TotRollos)$/) && (acc[key][keyName] += linea[keyName])); }
+            if (!acc[key]) {
+                acc[key] = { ...linea };
+                console.log(`Nueva agrupación - Key: ${key}, Atados: ${linea.Atados}, Rollos: ${linea.Rollos}, TotAtados: ${linea.TotAtados}, TotRollos: ${linea.TotRollos}`);
+            } else {
+                Object.keys(linea).forEach(keyName => {
+                    if (keyName.match(/^(Programados|SobreOrden|Calidad|TotAtados|TotRollos)$/)) {
+                        acc[key][keyName] = (acc[key][keyName] || 0) + (linea[keyName] || 0);
+                    }
+                });
+                console.log(`Agrupación actualizada - Key: ${key}, Atados: ${acc[key].Atados}, Rollos: ${acc[key].Rollos}, TotAtados: ${acc[key].TotAtados}, TotRollos: ${acc[key].TotRollos}`);
+            }
             return acc;
         }, {});
-        
+
         let tieneNotasCalipso = false;
         try {
-             const [notasMatchingResult, notasVariasResult, motivoBloqueoResult] = await Promise.all([
+            const [notasMatchingResult, notasVariasResult, motivoBloqueoResult] = await Promise.all([
                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasMatchingCalipso @OperacionID=?", [operacionPrincipal.Operacion_ID]),
                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasCalipso @LoteID=?", [operacionPrincipal.Origen_Lote_ID]),
                 dbSintecromDesa.raw("EXEC SP_REG_TraerMotivoBloqueo @Operacion_id=?", [operacionPrincipal.Operacion_ID])
@@ -330,8 +1290,10 @@ const getDetalleOperacion = async (req, res) => {
             if (notasMatchingResult[0]?.NotasOperacion?.trim() || notasVariasResult[0]?.NotasCalidad?.trim() || notasVariasResult[0]?.NotasVarias?.trim() || motivoBloqueoResult[0]?.MOTIVOBLOQUEO?.trim()) {
                 tieneNotasCalipso = true;
             }
-        } catch (e) { console.warn(`ADVERTENCIA: Verificación de notas Calipso falló. Error: ${e.message}`); }
-        
+        } catch (e) {
+            console.warn(`ADVERTENCIA: Verificación de notas Calipso falló. Error: ${e.message}`);
+        }
+
         let tieneNotasSRP = false;
         try {
             const [notas1, notas2, notas3, notas4] = await Promise.all([
@@ -341,35 +1303,48 @@ const getDetalleOperacion = async (req, res) => {
                 dbRegistracionNET.raw("EXEC SP_TraerNotasTraccion @Operacion_ID=?", [operacionId])
             ]);
             const hayTexto = (r) => r && r.length > 0 && Object.values(r[0]).some(v => typeof v === 'string' && v.trim() !== '');
-            if (hayTexto(notas1) || hayTexto(notas2) || hayTexto(notas3) || hayTexto(notas4)) { tieneNotasSRP = true; }
-        } catch (e) { console.warn(`ADVERTENCIA: Verificación de notas SRP falló. Error: ${e.message}`); }
-        
+            if (hayTexto(notas1) || hayTexto(notas2) || hayTexto(notas3) || hayTexto(notas4)) {
+                tieneNotasSRP = true;
+            }
+        } catch (e) {
+            console.warn(`ADVERTENCIA: Verificación de notas SRP falló. Error: ${e.message}`);
+        }
+
         const header = {
             Clientes: operacionPrincipal.Clientes,
             SerieLote: operacionPrincipal.Origen_Lote.split(' - ').slice(0, 2).join(' - '),
             Matching: operacionPrincipal.Nro_Matching,
             Batch: operacionPrincipal.NroBatch,
-            ScrapProgramado: operacionPrincipal.KilosMermaE,
+            ScrapProgramado: totalMerma,
             Cuchillas: operacionPrincipal.Operacion_Cuchillas,
             Pasadas: operacionPrincipal.Pasadas_Origen,
             Diametro: operacionPrincipal.Diametro,
             Corona: operacionPrincipal.CoronaE,
             Stock: operacionPrincipal.Stock,
             KgsProgramados: operacionPrincipal.KilosProgramadosEntrantes,
-            CantAtados: operacionPrincipal.CantidadPaquetes,
-            CantRollos: operacionPrincipal.CantidadRollos,
+            CantAtados: totalAtadosEntrantes,
+            CantRollos: totalRollosEntrantes,
             ...fichaTecnica,
-            status: finalStatus, // <-- Se envía el status calculado correctamente
+            status: finalStatus,
             tieneNotasCalipso: tieneNotasCalipso,
             tieneNotasSRP: tieneNotasSRP,
             maquinaId: maquinaId,
             LoteID: operacionPrincipal.Origen_Lote_ID,
         };
-        
+
         const lineas = Object.values(lineasAgrupadas);
-        const balance = { kgsEntrantes: transaccion ? transaccion.Kilos_Balanza : 0, programados: header.KgsProgramados, sobreOrden: lineas.reduce((sum, item) => sum + item.SobreOrden, 0), calidad: lineas.reduce((sum, item) => sum + item.Calidad, 0), sobrante: 0, scrap: 0, };
+        console.log(`Líneas finales agrupadas:`, lineas.map(l => ({ Ancho: l.Ancho, Atados: l.Atados, Rollos: l.Rollos, TotAtados: l.TotAtados, TotRollos: l.TotRollos })));
+
+        const balance = {
+            kgsEntrantes: transaccion ? transaccion.Kilos_Balanza : 0,
+            programados: header.KgsProgramados,
+            sobreOrden: lineas.reduce((sum, item) => sum + item.SobreOrden, 0),
+            calidad: lineas.reduce((sum, item) => sum + item.Calidad, 0),
+            sobrante: 0,
+            scrap: 0,
+        };
         balance.saldo = (balance.kgsEntrantes || 0) - balance.sobreOrden - balance.calidad;
-        
+
         res.status(200).json({ header, lineas, balance });
 
     } catch (error) {
@@ -377,7 +1352,6 @@ const getDetalleOperacion = async (req, res) => {
         res.status(500).json({ error: "Error interno del servidor.", details: error.message });
     }
 };
-
 
 const getCalculo_cuchillas = async (req, res) => {
     const { cuchillas, espesor, ancho } = req.body;
@@ -732,6 +1706,48 @@ const getNotasCalipso = async (req, res) => {
     }
 };
 
+const updateOperacion = async (req, res) => {
+    const { operacionId } = req.params;
+    const updatedData = req.body;
+
+    try {
+        // Aquí debes implementar la lógica para actualizar la operación en la base de datos.
+        // Esto depende de tus procedimientos almacenados o lógica de negocio. Por ejemplo:
+        const transaction = await dbRegistracionNET.transaction();
+        try {
+            await transaction("OperacionesCalipso")
+                .where({ Operacion_ID: operacionId })
+                .update({
+                    Clientes: updatedData.header?.Clientes,
+                    Origen_Lote: updatedData.header?.SerieLote,
+                    Nro_Matching: updatedData.header?.Matching,
+                    NroBatch: updatedData.header?.Batch,
+                    CantidadPaquetes: updatedData.header?.CantAtados,
+                    CantidadRollos: updatedData.header?.CantRollos,
+                    Stock: updatedData.header?.Stock,
+                    KilosProgramadosEntrantes: updatedData.header?.KgsProgramados,
+                    // Añadir otros campos según necesites
+                });
+
+            // Actualizar líneas si es necesario (esto requeriría una tabla separada)
+            if (updatedData.lineas) {
+                // Lógica para actualizar las líneas (puedes necesitar un SP o tabla específica)
+                // Ejemplo hipotético:
+                // await transaction.raw("EXEC SP_ActualizarLineas @Operacion_ID=?, @Lineas=?", [operacionId, JSON.stringify(updatedData.lineas)]);
+            }
+
+            await transaction.commit();
+            res.status(200).json({ message: "Operación actualizada con éxito." });
+        } catch (error) {
+            await transaction.rollback();
+            throw error;
+        }
+    } catch (error) {
+        console.error(`Error al actualizar la operación ${operacionId}:`, error);
+        res.status(500).json({ error: "No se pudo actualizar la operación.", details: error.message });
+    }
+};
+
 module.exports = {
     getMaquinas,
     getOperaciones,
@@ -742,5 +1758,6 @@ module.exports = {
     getFichaTecnicaProductos,
     getFichaTecnicaDetalle,
     toggleSuspensionOperacion,
-    getNotasCalipso
+    getNotasCalipso,
+    updateOperacion
 };

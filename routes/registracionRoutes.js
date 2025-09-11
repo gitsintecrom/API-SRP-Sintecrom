@@ -13,7 +13,8 @@ const {
     getFichaTecnicaProductos,
     getFichaTecnicaDetalle,
     toggleSuspensionOperacion,
-    getNotasCalipso
+    getNotasCalipso,
+    updateOperacion
 } = require("../controllers/registracionController");
 
 // Rutas (ahora usan directamente los nombres de las funciones)
@@ -27,5 +28,6 @@ router.get("/fichatecnica/detalle/:codProd", getFichaTecnicaDetalle);
 router.post("/cuchillas/calcular", getCalculo_cuchillas);
 router.post("/operaciones/suspender/:operacionId", toggleSuspensionOperacion);
 router.get("/notas-calipso/:operacionId", getNotasCalipso); 
+router.put("/editar/:operacionId", updateOperacion);
 
 module.exports = router;
