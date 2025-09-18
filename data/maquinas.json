@@ -6,7 +6,7 @@
       { "id": "PL1", "nombre": "Plancha 1", "color": "btn-warning" }, 
       { "id": "PL2", "nombre": "Plancha 2", "color": "btn-warning" }, 
       { "id": "PL3", "nombre": "Plancha 3", "color": "btn-warning" },
-      { "id": "PI", "nombre": "Pintura", "color": "btn-danger" }, 
-      { "id": "EMB", "nombre": "Embalaje", "color": "btn-danger" },
-      { "id": "HOR", "nombre": "Horno", "color": "btn-danger" }
+      { "id": "PI", "nombre": "Pintura", "color": "btn-success" }, 
+      { "id": "EMB", "nombre": "Embalaje", "color": "btn-success" },
+      { "id": "HOR", "nombre": "Horno", "color": "btn-success" }
     ]
