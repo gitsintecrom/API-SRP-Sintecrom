@@ -11,6 +11,9 @@ const secretKey = process.env.JWT_SECRET || "your-secret-key";
 exports.login = async (req, res) => {
   const { nombre, password } = req.body;
 
+  // LOG 1: Ver payload recibido
+  console.log("Payload recibido:", { nombre, password: password }); // Oculta password por seguridad
+
   try {
     const user = await dbRegistracionNET("UsuariosDB").where({ nombre }).first();
     
@@ -19,6 +22,10 @@ exports.login = async (req, res) => {
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
+    
+    // LOG 3: Ver match de password
+    console.log("Password match:", isMatch);
+
     if (!isMatch) {
       return res.status(401).json({ success: false, message: "Usuario o contraseña incorrectos" });
     }
@@ -47,6 +54,9 @@ exports.login = async (req, res) => {
 
     // Depuración: Ver el payload completo
     console.log("Payload enviado:", payload);
+
+    // LOG 4: Antes de enviar response
+    console.log("Login exitoso, token generado");
 
     res.json({
       success: true,

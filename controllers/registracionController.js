@@ -200,25 +200,32 @@ const getOperaciones = async (req, res) => {
 
 const getDetalleOperacion = async (req, res) => {
     const { operacionId } = req.params;
+    const SCRAP_NO_SERIADO_GUID = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
+
+    console.log("OPERACIONID...........", operacionId);
+
     try {
         const [opMaquinaInfo] = await dbRegistracionNET.raw("SELECT Maquina FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
         if (!opMaquinaInfo) return res.status(404).json({ error: "Operación no encontrada para determinar la máquina." });
-
         const maquinaId = opMaquinaInfo.Maquina;
         const spName = (maquinaId === 'EMB') ? 'SP_TraerOperacionesPorMaquinaEmbalaje' : 'SP_TraerOperacionesPorMaquina';
         const todasLasOperaciones = await dbRegistracionNET.raw(`EXEC ${spName} @Maquina=?`, [maquinaId]);
-        const operacionPrincipal = todasLasOperaciones.find(op => op.Operacion_ID === operacionId) || {};
-
-        console.log('operacionPrincipal.Origen_Lote:', operacionPrincipal.Origen_Lote);
+        const operacionPrincipal = todasLasOperaciones.find(op => op.Operacion_ID === operacionId);
 
         if (!operacionPrincipal) {
             return res.status(404).json({ error: "Operación no encontrada en la lista de la máquina." });
         }
 
-        // Consulta específica para Pasadas_Origen desde OperacionesCalipso
+        console.log('operacionPrincipal.Origen_Lote:', operacionPrincipal.Origen_Lote);
+        console.log('operacionPrincipal.Origen_Lote_ID:', operacionPrincipal.Origen_Lote_ID);
+
+        const loteId = operacionPrincipal.Origen_Lote_ID || '00000000-0000-0000-0000-000000000000';
+        const [inspeccionGral] = await dbRegistracionNET.raw("EXEC SP_TraerInspeccionSlitter @Operacion_ID=?, @Lote_ID=?", [operacionId, loteId]);
+        console.log('inspeccionGral:', inspeccionGral);
+
         const pasadasResult = await dbRegistracionNET.raw("SELECT Pasadas_Origen FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
         console.log('pasadasResult:', pasadasResult);
-        const pasadasOrigen = pasadasResult[0]?.Pasadas_Origen;
+        const pasadasOrigen = pasadasResult[0]?.Pasadas_Origen?.trim() || '';
 
         const [opAnteriorResult, calidadResult, multiOpResult] = await Promise.all([
             dbRegistracionNET.raw("EXEC SP_TraerOperacionesAnteriores @Origen_Lote_ID=?", [operacionPrincipal.Origen_Lote_ID]),
@@ -237,11 +244,14 @@ const getDetalleOperacion = async (req, res) => {
         const hasQualityCheck = calidad !== undefined;
         const aCalidad = hasQualityCheck && calidad.Dictamen === 0;
         const aCalidadDictamen = hasQualityCheck && (calidad.Dictamen === 1 || calidad.Dictamen === 2);
+
         let isOutOfTolerance = false;
         const pesada = parseFloat(operacionPrincipal.Kilos_Balanza || 0);
         const stockValue = parseFloat(operacionPrincipal.Stock || 0);
         if (pesada > 0 && stockValue > 0) {
-            const tolerancePercentage = (opAnteriorStatusText === 'OK-R') ? TOLERANCIA_OP_RAIZ : TOLERANCIA_OP_INTERMEDIA;
+            const TOLERANCIA_OP_RAIZ = 0.05;
+            const TOLERANCIA_OP_INTERMEDIA = 0.02;
+            let tolerancePercentage = TOLERANCIA_OP_RAIZ;
             let toleranceMargin = stockValue * tolerancePercentage;
             if (toleranceMargin < 1) toleranceMargin = 1;
             if (pesada > stockValue + toleranceMargin || pesada < stockValue - toleranceMargin) {
@@ -250,90 +260,261 @@ const getDetalleOperacion = async (req, res) => {
         }
 
         let finalStatus;
-        if (!hasStock || !isAbastecida || !opAnteriorOk) { finalStatus = 'BLOQUEADA'; }
-        else if (isSuspended) { finalStatus = 'SUSPENDIDA'; }
-        else if (isOpen && (aCalidad || aCalidadDictamen)) { finalStatus = aCalidad ? 'EN_CALIDAD' : 'CALIDAD_DICTAMINADA'; }
-        else if (isOpen) { finalStatus = 'EN_PROCESO'; }
-        else if (isOutOfTolerance) { finalStatus = 'TOLERANCIA_EXCEDIDA'; }
-        else { finalStatus = 'LISTA'; }
+        if (!hasStock || !isAbastecida || !opAnteriorOk) {
+            finalStatus = 'BLOQUEADA';
+        } else if (isSuspended) {
+            finalStatus = 'SUSPENDIDA';
+        } else if (isOpen && (aCalidad || aCalidadDictamen)) {
+            finalStatus = aCalidad ? 'EN_CALIDAD' : 'CALIDAD_DICTAMINADA';
+        } else if (isOpen) {
+            finalStatus = 'EN_PROCESO';
+        } else if (isOutOfTolerance) {
+            finalStatus = 'TOLERANCIA_EXCEDIDA';
+        } else {
+            finalStatus = 'LISTA';
+        }
 
         const [transaccion] = await dbRegistracionNET.raw("SELECT Kilos_Balanza FROM Transacciones WHERE Operacion_ID = ?", [operacionId]);
+        console.log('DEBUG - Transaccion Kilos_Balanza:', transaccion ? transaccion.Kilos_Balanza : 'No encontrado');
+        const kgsEntrantesBalanza = transaccion ? parseFloat(transaccion.Kilos_Balanza || 0) : 0;
 
-        let fichaTecnica = {};
+        let fichaTecnica = {
+            Familia: 'N/A',
+            Aleacion: 'N/A',
+            Temple: 'N/A',
+            Espesor: 'N/A',
+            PaisOrigen: 'N/A',
+            Recubrimiento: 'N/A',
+            Calidad: 'N/A',
+            Ancho: operacionPrincipal.Operacion_TotalAncho || 'N/A'
+        };
+
+        const loteString = operacionPrincipal.Origen_Lote ? operacionPrincipal.Origen_Lote.split(' - ').slice(0, 2).join(' - ') : 'N/A';
+        const codProdIntermedio = operacionPrincipal.Codigo_Producto || '';
+        console.log('DEBUG FichaTecnica - CodProd usado:', codProdIntermedio);
+        console.log('DEBUG FichaTecnica - LoteString usado:', loteString);
+
         try {
-            const fichaResultPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [operacionPrincipal.Origen_Lote_ID]);
-            if (fichaResultPPP && fichaResultPPP.length > 0) {
-                const f = fichaResultPPP[0];
-                fichaTecnica = {
-                    Familia: f.Material,
-                    Aleacion: f.Aleacion,
-                    Temple: f.Temple,
-                    Espesor: f.Espesor,
-                    PaisOrigen: f.PropioTercero,
-                    Recubrimiento: f.Cobertura,
-                    Calidad: f.Calidad,
-                    Ancho: operacionPrincipal.Operacion_TotalAncho
-                };
+            let fichaFromCodProd = null;
+            if (codProdIntermedio) {
+                console.log('DEBUG FichaTecnica - Intentando SP_TraerFichaTecnica con CodProd');
+                const fichaResultCodProd = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+                console.log('DEBUG FichaTecnica - Resultado SP_TraerFichaTecnica:', fichaResultCodProd);
+                if (fichaResultCodProd && fichaResultCodProd.length > 0) {
+                    const f = fichaResultCodProd[0];
+                    fichaFromCodProd = {
+                        Familia: f.Familia || 'N/A',
+                        Aleacion: f.Aleacion || 'N/A',
+                        Temple: f.Temple || 'N/A',
+                        Espesor: `${f.Espesor || 'N/A'} Máx:${(parseFloat(f.Espesor || 0) + parseFloat(f.ESPESORMAX || 0)).toFixed(3)} Mín:${(parseFloat(f.Espesor || 0) + parseFloat(f.ESPESORMIN || 0)).toFixed(3)}`,
+                        PaisOrigen: f.ORIGEN || 'N/A',
+                        Recubrimiento: f.Recubrimiento || 'N/A',
+                        Calidad: f.CALIDADORI || 'N/A',
+                        Ancho: operacionPrincipal.Operacion_TotalAncho || f.Ancho || 'N/A'
+                    };
+                }
             }
+            if (!fichaFromCodProd) {
+                console.log('DEBUG FichaTecnica - Intentando SP_REG_TraerFichaTecnicaPPP con GUID LoteID');
+                const fichaResultPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [loteId]);
+                console.log('DEBUG FichaTecnica - Resultado SP_REG_TraerFichaTecnicaPPP:', fichaResultPPP);
+                if (fichaResultPPP && fichaResultPPP.length > 0) {
+                    const f = fichaResultPPP[0];
+                    fichaTecnica = {
+                        Familia: f.Material ? (f.Material.length >= 10 ? f.Material.substring(8, 2) : f.Material) : 'N/A',
+                        Aleacion: f.Aleacion || 'N/A',
+                        Temple: f.Temple || 'N/A',
+                        Espesor: f.Espesor ? parseFloat(f.Espesor).toFixed(3) : 'N/A',
+                        PaisOrigen: f.PropioTercero || 'N/A',
+                        Recubrimiento: f.Cobertura || 'N/A',
+                        Calidad: f.Calidad || 'N/A',
+                        Ancho: operacionPrincipal.Operacion_TotalAncho || f.Ancho || 'N/A'
+                    };
+                } else {
+                    console.warn('ADVERTENCIA: SP_REG_TraerFichaTecnicaPPP devolvió vacío.');
+                }
+            } else {
+                fichaTecnica = fichaFromCodProd;
+            }
+            console.log('DEBUG FichaTecnica - Datos finales:', fichaTecnica);
         } catch (e) {
-            console.warn(`ADVERTENCIA: SP de Ficha Técnica falló. Error: ${e.message}`);
+            console.error(`ERROR FichaTecnica para LoteID ${loteString} / CodProd ${codProdIntermedio}:`, e.message);
         }
 
         const tieneMultiOp = multiOpResult.length > 0;
         const numeroMultiOperacion = tieneMultiOp ? multiOpResult[0].NumeroMultiOperacion : null;
         const operacionesInvolucradas = numeroMultiOperacion
             ? await dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacionporNumero @NumeroMultiOperacion=?", [numeroMultiOperacion])
-            : [{ Operacion_ID: operacionId }];
+            : [{ Operacion_ID: operacionId, CantidadPaquetes: operacionPrincipal.CantidadPaquetes, CantidadRollos: operacionPrincipal.CantidadRollos }];
+
+        let totalScrapSeriado = 0;
+        let totalScrapNoSeriado = 0;
+
+        for (const op of operacionesInvolucradas) {
+            const scrapNoSeriadoResult = await dbRegistracionNET.raw(`
+                SELECT ISNULL(SUM(Kilos_Sobreorden), 0) AS Total
+                FROM Registracion
+                WHERE Operacion_ID = ? AND Sobrante = 2 AND Lote_IDS = ?
+            `, [op.Operacion_ID, SCRAP_NO_SERIADO_GUID]);
+            totalScrapNoSeriado += parseFloat(scrapNoSeriadoResult[0]?.Total || 0);
+
+            const scrapSeriadoResult = await dbRegistracionNET.raw(`
+                SELECT ISNULL(SUM(Kilos_Sobreorden), 0) AS Total
+                FROM Registracion
+                WHERE Operacion_ID = ? AND Sobrante = 2 AND (Lote_IDS IS NULL OR Lote_IDS != ?)
+            `, [op.Operacion_ID, SCRAP_NO_SERIADO_GUID]);
+            totalScrapSeriado += parseFloat(scrapSeriadoResult[0]?.Total || 0);
+        }
+
+        console.log("✅ totalScrapSeriado (legacy-compatible):", totalScrapSeriado);
+        console.log("✅ totalScrapNoSeriado (legacy-compatible):", totalScrapNoSeriado);
+        const totalScrapBalance = totalScrapSeriado + totalScrapNoSeriado;
 
         let lineasFinales = [];
+        let totalKgsProgramados = 0;
         let totalMerma = 0;
-        let totalAtadosEntrantes = operacionPrincipal.CantidadPaquetes || 0;
-        let totalRollosEntrantes = operacionPrincipal.CantidadRollos || 0;
+
         for (const op of operacionesInvolucradas) {
             const cortes = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesARegistrar @Operacion_ID=?", [op.Operacion_ID]);
-            for (const corte of cortes) {
+            if (cortes.length > 0) {
+                totalMerma += parseFloat(cortes[0].KilosMermaE || 0);
+            }
+
+            let currentGroupAtados = 0;
+            let currentGroupRollos = 0;
+            let currentGroupKey = null;
+
+            for (let corteIndex = 0; corteIndex < cortes.length; corteIndex++) {
+                const corte = cortes[corteIndex];
                 const loteIdsParaModal = corte.Lote_IDS;
+                const datosGuardadosResult = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradas @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?", [op.Operacion_ID, loteIdsParaModal || '00000000-0000-0000-0000-000000000000', 0]);
+                const datosGuardados = datosGuardadosResult[0];
+                console.log(`DEBUG BACKEND - datosGuardados para Op=${op.Operacion_ID}, LoteIDs=${loteIdsParaModal}:`, datosGuardados);
 
-                const [datosGuardados] = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradas @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?", [op.Operacion_ID, loteIdsParaModal || '00000000-0000-0000-0000-000000000000', 0]);
+                const datosScrapResult = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradas @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?", [op.Operacion_ID, loteIdsParaModal || '00000000-0000-0000-0000-000000000000', 2]);
+                const datosScrap = datosScrapResult[0];
+                console.log(`DEBUG BACKEND - datosScrap para Op=${op.Operacion_ID}, LoteIDs=${loteIdsParaModal}:`, datosScrap);
 
-                totalMerma += parseFloat(corte.KilosMermaE || 0);
                 const serieLote = operacionPrincipal.Origen_Lote ? operacionPrincipal.Origen_Lote.split(' - ').slice(0, 2).join(' - ') : 'No disponible';
+                const groupKey = `${(corte.OperacionS_TotalAncho || 0).toFixed(0)}-${corte.Operacion_Cuchillas || ''}-${corte.TareaDestino || ''}-${corte.Destino_Lote || ''}`;
+
+                let lineaAtados = parseInt(corte.CantidadPaquetes || 0);
+                if (lineaAtados === 0) lineaAtados = 1;
+                let lineaRollos = parseInt(corte.CantidadRollos || 0);
+                if (lineaRollos === 0) lineaRollos = 1;
+
+                if (currentGroupKey !== groupKey) {
+                    currentGroupAtados = lineaAtados;
+                    currentGroupRollos = lineaRollos;
+                    currentGroupKey = groupKey;
+                } else {
+                    lineaAtados = currentGroupAtados;
+                    lineaRollos = currentGroupRollos;
+                }
+
+                const scrapDeCorte = parseFloat(datosScrap?.Kilos_Sobreorden || 0);
                 const linea = {
                     Ancho: (corte.OperacionS_TotalAncho || 0).toFixed(0),
                     Cuchillas: corte.Operacion_Cuchillas,
                     Tarea: corte.TareaDestino,
                     Destino: corte.Destino_Lote,
-                    Atados: totalAtadosEntrantes > 0 ? 1 : 0,
-                    Rollos: totalRollosEntrantes > 0 ? 1 : 0,
+                    Atados: lineaAtados,
+                    Rollos: lineaRollos,
                     Programados: parseFloat(corte.KilosProgramadosS || 0),
-                    SobreOrden: datosGuardados?.Kilos_Sobreorden || 0,
-                    Calidad: datosGuardados?.Kilos_Calidad || 0,
-                    TotAtados: datosGuardados?.Atados || 0,
-                    TotRollos: datosGuardados?.Rollos || 0,
+                    SobreOrden: parseFloat(datosGuardados?.Kilos_Sobreorden || 0),
+                    Calidad: parseFloat(datosGuardados?.Kilos_Calidad || 0),
+                    Scrap: scrapDeCorte,
+                    TotAtados: parseFloat(datosGuardados?.Atados || 0),
+                    TotRollos: parseFloat(datosGuardados?.Rollos || 0),
                     Lote_IDS: loteIdsParaModal,
-                    SerieLote: serieLote // Añadimos el campo SerieLote a cada línea
+                    SerieLote: serieLote,
+                    esSobrante: false,
+                    esScrap: false,
+                    esScrapNoSeriado: false,
+                    Operacion_ID: op.Operacion_ID  // 👈 AGREGADO AQUÍ
                 };
+
                 lineasFinales.push(linea);
-                console.log(`Línea inicial - Operación: ${op.Operacion_ID}, Lote_IDS: ${linea.Lote_IDS}, SerieLote: ${linea.SerieLote}, Atados: ${linea.Atados}, Rollos: ${linea.Rollos}, TotAtados: ${linea.TotAtados}, TotRollos: ${linea.TotRollos}`);
+                totalKgsProgramados += linea.Programados;
+                console.log(`Línea normal - GrupoKey: ${groupKey}, Atados: ${lineaAtados}, Rollos: ${lineaRollos}, Programados: ${linea.Programados}, SobreOrden: ${linea.SobreOrden}, Scrap: ${linea.Scrap}, TotAtados: ${linea.TotAtados}, TotRollos: ${linea.TotRollos}`);
+            }
+
+            // ✅ PROCESAR SOBRANTE (sobrante = 1)
+            const sobranteDirectQuery = `
+                SELECT 
+                    SUM(Peso) AS Kilos_Sobreorden,
+                    SUM(Calidad) AS Kilos_Calidad,
+                    COUNT(*) AS Atados,
+                    SUM(Rollos) AS Rollos
+                FROM [RegistracionNET].[dbo].[Atados] 
+                WHERE Operacion_ID = ? AND Sobrante = 1;
+            `;
+
+            const sobranteDirectResult = await dbRegistracionNET.raw(sobranteDirectQuery, [op.Operacion_ID]);
+            console.log("✅ sobranteDirectResult (consulta directa):", sobranteDirectResult);
+
+            if (sobranteDirectResult && sobranteDirectResult.length > 0) {
+                const sobranteData = sobranteDirectResult[0];
+                if (sobranteData.Kilos_Sobreorden > 0 || sobranteData.Kilos_Calidad > 0 || sobranteData.Atados > 0) {
+                    const lineaSobrante = {
+                        Ancho: (operacionPrincipal.Operacion_TotalAncho || 0).toFixed(0),
+                        Cuchillas: operacionPrincipal.Operacion_Cuchillas,
+                        Tarea: 'Sobrante',
+                        Destino: 'Sobrante',
+                        Atados: 0,
+                        Rollos: 0,
+                        Programados: 0,
+                        SobreOrden: parseFloat(sobranteData.Kilos_Sobreorden || 0),
+                        Calidad: parseFloat(sobranteData.Kilos_Calidad || 0),
+                        Scrap: 0,
+                        TotAtados: parseFloat(sobranteData.Atados || 0),
+                        TotRollos: parseFloat(sobranteData.Rollos || 0),
+                        Lote_IDS: null,
+                        SerieLote: operacionPrincipal.Origen_Lote ? operacionPrincipal.Origen_Lote.split(' - ').slice(0, 2).join(' - ') : 'No disponible',
+                        esSobrante: true,
+                        esScrap: false,
+                        esScrapNoSeriado: false,
+                        Operacion_ID: op.Operacion_ID  // 👈 AGREGADO AQUÍ
+                    };
+                    lineasFinales.push(lineaSobrante);
+                    console.log(`✅ Línea Sobrante - SobreOrden: ${lineaSobrante.SobreOrden}, Calidad: ${lineaSobrante.Calidad}, TotAtados: ${lineaSobrante.TotAtados}`);
+                } else {
+                    console.log("⚠️ No se encontraron datos de Sobrante para esta operación.");
+                }
+            } else {
+                console.log("⚠️ Consulta directa de Sobrante devolvió vacío o sin resultados.");
             }
         }
 
         const lineasAgrupadas = lineasFinales.reduce((acc, linea) => {
+            if (linea.esSobrante || linea.esScrap) {
+                acc[`ESPECIAL-${lineasFinales.indexOf(linea)}`] = linea;
+                return acc;
+            }
             const key = `${linea.Ancho}-${linea.Cuchillas}-${linea.Tarea}-${linea.Destino}`;
             if (!acc[key]) {
                 acc[key] = { ...linea };
-                console.log(`Nueva agrupación - Key: ${key}, SerieLote: ${linea.SerieLote}, Atados: ${linea.Atados}, Rollos: ${linea.Rollos}, TotAtados: ${linea.TotAtados}, TotRollos: ${linea.TotRollos}`);
             } else {
                 Object.keys(linea).forEach(keyName => {
-                    if (keyName.match(/^(Programados|SobreOrden|Calidad|TotAtados|TotRollos)$/)) {
+                    if (['Programados', 'SobreOrden', 'Calidad', 'Scrap', 'TotAtados', 'TotRollos'].includes(keyName)) {
                         acc[key][keyName] = (acc[key][keyName] || 0) + (linea[keyName] || 0);
                     }
                 });
-                acc[key].SerieLote = linea.SerieLote; // Mantener el mismo SerieLote en la agrupación
-                console.log(`Agrupación actualizada - Key: ${key}, SerieLote: ${acc[key].SerieLote}, Atados: ${acc[key].Atados}, Rollos: ${acc[key].Rollos}, TotAtados: ${acc[key].TotAtados}, TotRollos: ${acc[key].TotRollos}`);
+                acc[key].SerieLote = linea.SerieLote;
             }
             return acc;
         }, {});
+
+        const lineas = Object.values(lineasAgrupadas);
+        const totalAtadosProducidos = lineas.reduce((sum, item) => sum + (item.TotAtados || 0), 0);
+        const totalRollosProducidos = lineas.reduce((sum, item) => sum + (item.TotRollos || 0), 0);
+        console.log('DEBUG - totalAtadosProducidos:', totalAtadosProducidos);
+        console.log('DEBUG - totalRollosProducidos:', totalRollosProducidos);
+        console.log('DEBUG - totalScrapEnLineas (acumulado de cada línea):', lineas.reduce((sum, item) => sum + item.Scrap, 0));
+
+        const recalculatedKgsProgramados = totalKgsProgramados;
+        console.log('DEBUG - recalculatedKgsProgramados:', recalculatedKgsProgramados);
+        console.log('DEBUG - totalMerma:', totalMerma);
 
         let tieneNotasCalipso = false;
         try {
@@ -342,7 +523,10 @@ const getDetalleOperacion = async (req, res) => {
                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasCalipso @LoteID=?", [operacionPrincipal.Origen_Lote_ID]),
                 dbSintecromDesa.raw("EXEC SP_REG_TraerMotivoBloqueo @Operacion_id=?", [operacionPrincipal.Operacion_ID])
             ]);
-            if (notasMatchingResult[0]?.NotasOperacion?.trim() || notasVariasResult[0]?.NotasCalidad?.trim() || notasVariasResult[0]?.NotasVarias?.trim() || motivoBloqueoResult[0]?.MOTIVOBLOQUEO?.trim()) {
+            const notasMatching = notasMatchingResult[0];
+            const notasVarias = notasVariasResult[0];
+            const motivoBloqueo = motivoBloqueoResult[0];
+            if (notasMatching?.NotasOperacion?.trim() || notasVarias?.NotasCalidad?.trim() || notasVarias?.NotasVarias?.trim() || motivoBloqueo?.MOTIVOBLOQUEO?.trim()) {
                 tieneNotasCalipso = true;
             }
         } catch (e) {
@@ -357,21 +541,14 @@ const getDetalleOperacion = async (req, res) => {
                 dbRegistracionNET.raw("EXEC SP_TraerNotasHorno @Operacion_ID=?", [operacionId]),
                 dbRegistracionNET.raw("EXEC SP_TraerNotasTraccion @Operacion_ID=?", [operacionId])
             ]);
-            const hayTexto = (r) => r && r.length > 0 && Object.values(r[0]).some(v => typeof v === 'string' && v.trim() !== '');
-            if (hayTexto(notas1) || hayTexto(notas2) || hayTexto(notas3) || hayTexto(notas4)) {
+            const hayTextoEnPrimerElemento = (r) => r && r.length > 0 && Object.values(r[0]).some(v => typeof v === 'string' && v.trim() !== '');
+
+            if (hayTextoEnPrimerElemento(notas1) || hayTextoEnPrimerElemento(notas2) || hayTextoEnPrimerElemento(notas3) || hayTextoEnPrimerElemento(notas4)) {
                 tieneNotasSRP = true;
             }
         } catch (e) {
             console.warn(`ADVERTENCIA: Verificación de notas SRP falló. Error: ${e.message}`);
         }
-
-        const lineas = Object.values(lineasAgrupadas);
-        const totalCantRollos = lineas.reduce((sum, linea) => {
-            console.log(`Sumando TotRollos de línea: ${linea.TotRollos || 0}`);
-            return sum + (linea.TotRollos || 0);
-        }, 0);
-
-        const totalCantAtados = lineas.reduce((sum, linea) => sum + (linea.TotAtados || 0), 0);
 
         const header = {
             Clientes: operacionPrincipal.Clientes,
@@ -384,40 +561,47 @@ const getDetalleOperacion = async (req, res) => {
             Diametro: operacionPrincipal.Diametro,
             Corona: operacionPrincipal.CoronaE,
             Stock: operacionPrincipal.Stock,
-            KgsProgramados: operacionPrincipal.KilosProgramadosEntrantes,
-            CantAtados: totalCantAtados,
-            CantRollos: totalCantRollos,
+            KgsProgramados: recalculatedKgsProgramados,
+            CantAtados: totalAtadosProducidos,
+            CantRollos: totalRollosProducidos,
             ...fichaTecnica,
             status: finalStatus,
             tieneNotasCalipso: tieneNotasCalipso,
             tieneNotasSRP: tieneNotasSRP,
             maquinaId: maquinaId,
             LoteID: operacionPrincipal.Origen_Lote_ID,
+            inicioRevisado: inspeccionGral?.IniciaCorte === 1,
+            finalRevisado: inspeccionGral?.FinalizaOperacion === 1
         };
 
         console.log('header.Pasadas final:', header.Pasadas);
         console.log('header.CantAtados final:', header.CantAtados);
         console.log('header.CantRollos final:', header.CantRollos);
+        console.log('header.KgsProgramados final:', header.KgsProgramados);
         console.log('header.SerieLote final:', header.SerieLote);
+        console.log('header.inicioRevisado final:', header.inicioRevisado);
+        console.log('header.finalRevisado final:', header.finalRevisado);
+        console.log("✅ totalScrapBalance (usado en balance):", totalScrapBalance);
 
         const balance = {
-            kgsEntrantes: transaccion ? transaccion.Kilos_Balanza : 0,
+            kgsEntrantes: kgsEntrantesBalanza,
             programados: header.KgsProgramados,
-            sobreOrden: lineas.reduce((sum, item) => sum + item.SobreOrden, 0),
-            calidad: lineas.reduce((sum, item) => sum + item.Calidad, 0),
-            sobrante: 0,
-            scrap: 0,
+            sobreOrden: lineas.filter(l => !l.esSobrante).reduce((sum, item) => sum + item.SobreOrden, 0),
+            calidad: lineas.filter(l => !l.esSobrante).reduce((sum, item) => sum + item.Calidad, 0),
+            sobrante: lineas.filter(l => l.esSobrante).reduce((sum, item) => sum + item.SobreOrden, 0),
+            scrap: totalScrapBalance,
+            scrapSeriado: totalScrapSeriado,
+            scrapNoSeriado: totalScrapNoSeriado,
         };
-        balance.saldo = (balance.kgsEntrantes || 0) - balance.sobreOrden - balance.calidad;
+        console.log('✅ DEBUG - Balance final con clasificación legacy-compatible:', balance);
+        balance.saldo = (balance.kgsEntrantes || 0) - balance.sobreOrden - balance.calidad - balance.sobrante - balance.scrap;
 
         res.status(200).json({ header, lineas, balance });
-
     } catch (error) {
         console.error(`\n===== ERROR CRÍTICO EN DETALLE OPERACIÓN =====\nID: ${operacionId}\n`, error);
         res.status(500).json({ error: "Error interno del servidor.", details: error.message });
     }
 };
-
 
 const getCalculo_cuchillas = async (req, res) => {
     const { cuchillas, espesor, ancho } = req.body;
@@ -495,13 +679,13 @@ const getInspeccionData = async (req, res) => {
             }
         }
 
-        // --- PASO 4: ENSAMBLAR RESPUESTA FINAL (Sin cambios) ---
+        // --- PASO 4: ENSAMBLAR RESPUESTA FINAL (CORREGIDO: Formateo de serieLote) ---
         const anchosPlantilla = operacionPrincipal.Operacion_Cuchillas.split('/').map(s => parseFloat(s.trim()));
         const responseData = {
             header: {
                 maquina: operacionPrincipal.Maquina || 'Slitter',
                 fecha: formatDateDDMMYYYY(inspeccionGral?.Fecha),
-                serieLote: inspeccionGral?.Bobina || operacionPrincipal.Origen_lote,
+                serieLote: inspeccionGral?.Bobina || (operacionPrincipal.Origen_Lote ? operacionPrincipal.Origen_Lote.split(' - ').slice(0, 2).join(' - ') : 'No disponible'), // CORRECCIÓN: Campo correcto + formateo
                 ordenProduccion: operacionPrincipal.NroBatch,
                 rolloEntrante: inspeccionGral?.RolloEntrante || 1,
                 cantPasadas: inspeccionGral?.CantPasada || parseInt(operacionPrincipal.Pasadas_Origen, 10) || 1,
@@ -814,14 +998,19 @@ const updateOperacion = async (req, res) => {
     }
 };
 
+
 const registrarPesaje = async (req, res) => {
     const { operacionId, loteIds, sobrante, atados } = req.body;
     const lineaData = req.body.lineaData || {};
 
-    // Depuración: Log de entrada
-    console.log('Datos recibidos:', { operacionId, loteIds, sobrante, atados, lineaData });
+    console.log("Datos: ", sobrante);
+    console.log("Tipo de peso: ", typeof(atados[0].peso));
+    
+    console.log("lineaData ", lineaData);
 
-    // Validaciones iniciales
+    console.log("Body ", req.body);
+
+    
     if (!operacionId) {
         return res.status(400).json({ error: "operacionId es requerido." });
     }
@@ -829,20 +1018,17 @@ const registrarPesaje = async (req, res) => {
         return res.status(400).json({ error: "Debe proporcionar al menos un atado." });
     }
 
-    // Función para validar GUIDs
     const validateGuid = (value) => {
-        if (!value || value === '' || value === null || value === undefined) return '00000000-0000-0000-0000-000000000000';
-        const guidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-        return guidRegex.test(value.toString()) ? value.toString() : '00000000-0000-0000-0000-000000000000';
+        if (!value || value === '' || value === null || value === undefined) return null;
+        const guidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
+        return guidRegex.test(value.toString()) ? value.toString() : null;
     };
 
-    // Validar todos los GUIDs posibles
     const validOperacionId = validateGuid(operacionId);
-    const validLoteIds = validateGuid(loteIds);
-    let validLoteScrap = null;
-    let destinoLoteScrap = null;
+    if (!validOperacionId) {
+        return res.status(400).json({ error: "operacionId inválido." });
+    }
 
-    // Calcular totales
     let sobreOrdenTotal = 0;
     let calidadTotal = 0;
     for (const atado of atados) {
@@ -859,92 +1045,134 @@ const registrarPesaje = async (req, res) => {
     }
 
     const transaction = await dbRegistracionNET.transaction();
+
+    
     try {
-        // Verificar estado de la operación
         const [estadoOp] = await transaction.raw("EXEC SP_TraerEstadoOperaciones @Operacion_ID=?", [validOperacionId]);
+
+        console.log("estadoOp ", estadoOp);
+
         if (estadoOp && estadoOp.Estado === '2') {
             throw new Error("La Operación ya fue CERRADA. No se puede registrar.");
         }
 
-        // Lógica para Scrap
-        if (sobrante === 2 && sobreOrdenTotal > 0) {
-            const [scrapLote] = await transaction.raw(
-                "EXEC SP_TraerLotesDisponiblesScrap @CodSerie=?",
-                [lineaData.CodSerie || '']
-            );
-            if (!scrapLote || scrapLote.length === 0) {
-                throw new Error("No se han programado kilos de Merma. NO puede registrar por Scrap");
-            }
-            validLoteScrap = validateGuid(scrapLote[0].Lote_IDS);
-            destinoLoteScrap = validateGuid(scrapLote[0].Destino_Lote);
+        // ✅ LÓGICA CORREGIDA
+        let loteIDSFinal = lineaData.LoteID;
+        let destinoLoteFinal = '';
 
-            await transaction.raw(
-                "EXEC SP_EditarLotesDisponiblesScrap @Lote_IDS=?, @Usado=1",
-                [validLoteScrap]
-            );
+        if (sobrante === 2) {
+            // SCRAP
+            if (lineaData?.bScrapNoSeriado) {
+                // Scrap No Seriado: usa GUID mágico, NO llama a merma
+                loteIDSFinal = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
+                destinoLoteFinal = 'Scrap No Seriado';
+            } else {
+                // Scrap Seriado: llama a merma
+                const [scrapLote] = await transaction.raw(
+                    "EXEC SP_TraerLotesDisponiblesScrap @CodSerie=?",
+                    [lineaData?.CodigoProductoS || '']
+                );
+                console.log("scrapLote  ----------    ", scrapLote);
+                console.log("lineaData?.DestinoLote    ", lineaData?.DestinoLote);
+                console.log("Lote_ID   ", lineaData?.LoteID);
+                
+                
+                // if (!scrapLote || !Array.isArray(scrapLote) || scrapLote.length === 0) {
+                //     throw new Error("No se han programado kilos de Merma. NO puede registrar por Scrap.");
+                // }
+
+                loteIDSFinal = lineaData?.LoteID;
+                destinoLoteFinal = lineaData?.DestinoLote;
+
+                await transaction.raw(
+                    "EXEC SP_EditarLotesDisponiblesScrap @Lote_IDS=?, @Usado=1",
+                    [loteIDSFinal]
+                );
+            }
+        } else if (sobrante === 1) {
+            // SOBRANTE: siempre null
+            loteIDSFinal = lineaData.LoteID;
+            destinoLoteFinal = lineaData?.DestinoLote || lineaData?.SerieLote;
+            console.log("Entro en sobrante");
+            
+        } else {
+            // LÍNEA NORMAL
+            loteIDSFinal = validateGuid(loteIds);
+            destinoLoteFinal = lineaData?.DestinoLote || lineaData?.SerieLote || '';
         }
 
-        // Determinar si es modificación
+        // Verificar modificación
         const [existingReg] = await transaction.raw(
             "EXEC SP_TraerOperacionesRegistradas @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?",
-            [validOperacionId, validLoteIds, sobrante]
+            [validOperacionId, loteIDSFinal, sobrante]
         );
         const esModificacion = existingReg && existingReg.length > 0;
 
-        // Eliminar atados existentes si es modificación
         if (esModificacion) {
             await transaction.raw(
                 "EXEC SP_EliminarAtadosRegistrados @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?",
-                [validOperacionId, validLoteIds, sobrante]
+                [validOperacionId, loteIDSFinal, sobrante]
             );
         }
 
-        // Generar número de etiqueta si no está presente
-        let etiquetaCounter = 1;
-        const atadosConEtiqueta = atados.map(atado => {
-            if (!atado.nroEtiqueta || atado.nroEtiqueta === 0) {
-                return { ...atado, nroEtiqueta: etiquetaCounter++ };
+        console.log("Sobrante ..........................", sobrante);
+        console.log("Linea Data Scrap No Seriado .......", lineaData?.bScrapNoSeriado);
+
+        if (sobrante !== 0 && !lineaData?.bScrapNoSeriado) {
+
+            console.log("Guarda atados .........");
+            
+            
+            // Insertar atados
+            let etiquetaCounter = 1;
+            const atadosConEtiqueta = atados.map(atado => ({
+                ...atado,
+                nroEtiqueta: atado.nroEtiqueta && atado.nroEtiqueta !== 0 ? atado.nroEtiqueta : etiquetaCounter++
+            }));
+    
+            for (const atado of atadosConEtiqueta) {
+                await transaction.raw(
+                    "EXEC SP_InsertarAtados @Operacion_ID=?, @Destino_Lote=?, @Atado=?, @Rollos=?, @Lote_IDS=?, @Sobrante=?, @Peso=?, @Calidad=?, @Etiqueta=?",
+                    [
+                        validOperacionId,
+                        destinoLoteFinal,
+                        atado.atado,
+                        atado.rollos,
+                        loteIDSFinal,
+                        sobrante,
+                        parseFloat(atado.peso),
+                        atado.esCalidad ? 1 : 0,
+                        atado.nroEtiqueta
+                    ]
+                );
             }
-            return { ...atado, nroEtiqueta: atado.nroEtiqueta };
-        });
-
-        // Insertar cada atado
-        for (const atado of atadosConEtiqueta) {
-            const params = [
-                validOperacionId,
-                validLoteScrap || validLoteIds,
-                atado.atado,
-                atado.rollos,
-                validLoteScrap || validLoteIds,
-                sobrante,
-                atado.peso,
-                atado.esCalidad ? 1 : 0,
-                atado.nroEtiqueta
-            ];
-            await transaction.raw(
-                "EXEC SP_InsertarAtados @Operacion_ID=?, @Destino_Lote=?, @Atado=?, @Rollos=?, @Lote_IDS=?, @Sobrante=?, @Peso=?, @Calidad=?, @Etiqueta=?",
-                params
-            );
         }
 
-        // Insertar/Actualizar la registración principal
+        const atadosConEtiqueta = [];
+
+        if (sobrante !== 0 && lineaData?.bScrapNoSeriado) {
+            lineaData.Tarea = lineaData.Maquina+' CORTE';
+        }
+
+
+        // Insertar/Editar registración principal
         const paramsReg = [
             validOperacionId,
-            lineaData.Tarea || '',
+            lineaData.Tarea ,
             lineaData.Maquina || '',
             lineaData.NroBatch || '',
             lineaData.Cuchillas || '',
             lineaData.CodigoProducto || '',
             lineaData.CodigoProductoS || '',
-            validateGuid(lineaData.LoteID || ''), // Validar Lote_ID
+            validateGuid(lineaData.LoteID || ''),
             lineaData.Programados || 0,
             sobreOrdenTotal,
             calidadTotal,
             '1',
             sobrante,
-            validLoteScrap || validLoteIds,
+            loteIDSFinal,
             '0',
-            destinoLoteScrap || validateGuid(lineaData.DestinoLote || ''),
+            destinoLoteFinal,
             lineaData.NroMatching || '',
             '0',
             atadosConEtiqueta.length,
@@ -954,17 +1182,30 @@ const registrarPesaje = async (req, res) => {
             'N'
         ];
 
-        // Depuración: Log de parámetros antes de ejecutar SP
-        console.log('Parámetros para SP_InsertarRegistracion:', paramsReg);
+
+        console.log("paramsReg .........", paramsReg);
+        
 
         if (esModificacion) {
             await transaction.raw(
-                "EXEC SP_EditarOperacionesRegistradas @Operacion_ID=?, @KilosSobreOrden=?, @KilosCalidad=?, @Estado=?, @ACalidad=?, @Lote_IDS=?, @Sobrante=?, @RetornaStock=?, @ACalidadSO=?, @Atados=?, @Rollos=?",
-                [validOperacionId, sobreOrdenTotal, calidadTotal, '1', '0', validLoteIds, sobrante, 'N', '0', atadosConEtiqueta.length, atadosConEtiqueta.reduce((sum, a) => sum + a.rollos, 0)]
+                "EXEC SP_EditarOperacionesRegistradas ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
+                [
+                    validOperacionId,
+                    sobreOrdenTotal,
+                    calidadTotal,
+                    '1',
+                    '0',
+                    loteIDSFinal,
+                    sobrante,
+                    'N',
+                    '0',
+                    atadosConEtiqueta.length,
+                    atadosConEtiqueta.reduce((sum, a) => sum + a.rollos, 0)
+                ]
             );
         } else {
             await transaction.raw(
-                "EXEC SP_InsertarRegistracion @Operacion_ID=?, @Tarea=?, @Maquina=?, @NroBatch=?, @Cuchillas=?, @CodProducto=?, @CodProductoS=?, @Lote_ID=?, @KilosProgramados=?, @KilosSobreOrden=?, @KilosCalidad=?, @Estado=?, @Sobrante=?, @Lote_IDS=?, @ACalidad=?, @Destino_Lote=?, @Nro_Matching=?, @ACalidadSO=?, @Atados=?, @Rollos=?, @Usuario=?, @FechaReg=?, @RetornaStock=?",
+                "EXEC SP_InsertarRegistracion ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
                 paramsReg
             );
         }
@@ -976,8 +1217,7 @@ const registrarPesaje = async (req, res) => {
             sobreOrdenTotal,
             calidadTotal,
             totalAtados: atadosConEtiqueta.length,
-            totalRollos: atadosConEtiqueta.reduce((sum, a) => sum + a.rollos, 0),
-            atados: atadosConEtiqueta // Incluir la grilla con nroEtiqueta
+            totalRollos: atadosConEtiqueta.reduce((sum, a) => sum + a.rollos, 0)
         });
 
     } catch (error) {
@@ -985,9 +1225,10 @@ const registrarPesaje = async (req, res) => {
         console.error("Error al registrar pesaje:", error);
         res.status(500).json({ error: error.message || "Error al registrar el pesaje." });
     }
+
+    
 };
 
-// --- Nuevo: Reset Pesaje (adaptado de btnResetSO_Click) ---
 const resetPesaje = async (req, res) => {
     const { operacionId, loteIds, sobrante } = req.body;
     const transaction = await dbRegistracionNET.transaction();
@@ -1004,7 +1245,26 @@ const resetPesaje = async (req, res) => {
     }
 };
 
-// /controllers/registracionController.js - Agregar este método
+const getCodigoProductoMerma = async (req, res) => {
+    console.log("Pasa por getCodigoProductoMerma -------->");
+    
+    const { operacionId } = req.params;
+    try {
+        const [result] = await dbRegistracionNET.raw(
+            "EXEC SP_TraerCodigoProductoMerma @Operacion_id=?",
+            [operacionId]
+        );
+        const codigo = result?.Codigo_ProductoS || '';
+        if (!codigo) {
+            return res.status(404).json({ error: "No se encontró un código de producto de merma para esta operación." });
+        }
+        res.status(200).json({ CodigoProductoS: codigo });
+    } catch (error) {
+        console.error("Error en getCodigoProductoMerma:", error);
+        res.status(500).json({ error: "Error al obtener el código de merma." });
+    }
+};
+
 const obtenerAtadosRegistrados = async (req, res) => {
     const { operacionId, loteIds, sobrante } = req.body;
 
@@ -1050,6 +1310,33 @@ const obtenerAtadosRegistrados = async (req, res) => {
     }
 };
 
+const obtenerRegistroScrapNoSeriado = async (req, res) => {
+    const { operacionId } = req.body;
+
+    try {
+        const result = await dbRegistracionNET.raw(`
+            SELECT 
+                ID,
+                Kilos_Sobreorden,
+                Rollos,
+                Nro_Matching
+            FROM Registracion
+            WHERE Operacion_ID = ? AND Sobrante = 2
+        `, [operacionId]);
+
+        // ✅ Si no hay resultados, devolver 404
+        if (!result || result.length === 0) {
+            return res.status(404).json(null); // o .json({})
+        }
+
+        // ✅ Devolver el primer registro (debería haber solo uno)
+        res.status(200).json(result[0]);
+    } catch (error) {
+        console.error("Error al obtener registro de scrap no seriado:", error);
+        res.status(500).json({ error: "Error al obtener registro de scrap no seriado" });
+    }
+};
+
 const obtenerYActualizarEtiqueta = async (req, res) => {
     const transaction = await dbRegistracionNET.transaction();
     try {
@@ -1089,6 +1376,295 @@ const obtenerUltimaEtiqueta = async (req, res) => {
     }
 };
 
+// Validar Supervisor/CALIDAD (FIX: Trim username y comparación case-insensitive si es necesario)
+const validateSupervisor = async (req, res) => {
+    const { username, password } = req.body;
+    try {
+        const trimmedUsername = username.trim();
+        console.log('=== DEBUG VALIDATE SUPERVISOR ===');
+        console.log('Username recibido (trimmed):', trimmedUsername);
+        console.log('Password recibido (oculto):', password ? '***' : 'vacío');
+
+        // Intento 1: SP original
+        let result = await dbRegistracionNET.raw("EXEC SP_TraerUsuarioSupervisor @Usuario=?", [trimmedUsername]);
+        console.log('Resultado del SP (raw):', result);
+        console.log('Número de rows del SP:', result.length);
+
+        let user = null;
+        if (result && result.length > 0) {
+            user = result[0];
+            console.log('Usuario del SP:', { nombre: user.nombre || user.Usuario, idRol: user.idRol });
+        } else {
+            console.log('SP no encontró usuario, intentando SELECT directo...');
+            // Intento 2: SELECT directo con columna "nombre" y "password"
+            result = await dbRegistracionNET.raw("SELECT * FROM UsuariosDB WHERE nombre = ? AND idRol IN (4,5)", [trimmedUsername]);
+            console.log('Resultado SELECT directo:', result);
+            console.log('Número de rows SELECT:', result.length);
+
+            if (result && result.length > 0) {
+                user = result[0];
+                console.log('Usuario del SELECT:', { nombre: user.nombre, idRol: user.idRol, password: user.password ? '*** (hasheado)' : 'vacío' });
+            } else {
+                console.log('No se encontró usuario');
+                res.status(401).json({ error: 'Usuario no encontrado' });
+                return;
+            }
+        }
+
+        // FIX: Usar user.password (columna real en DB)
+        let passwordMatch;
+        if (user.password && typeof user.password === 'string') { // Cambié a user.password
+            console.log('Password en DB (oculto):', user.password ? '*** (longitud: ' + user.password.length + ')' : 'vacío');
+            if (user.password.startsWith('$2b$') || user.password.startsWith('$2a$')) {
+                passwordMatch = await bcrypt.compare(password, user.password); // Desencripta con bcrypt
+            } else {
+                passwordMatch = password === user.password; // Comparación plana
+            }
+        } else {
+            passwordMatch = false;
+            console.log('No hay password en DB (user.password es null/undefined)');
+        }
+
+        console.log('Password match:', passwordMatch);
+
+        if (passwordMatch) {
+            const role = user.idRol === 5 ? 'Supervisor' : (user.idRol === 4 ? 'Calidad' : null);
+            console.log('Rol asignado:', role);
+            if (role) {
+                console.log('=== VALIDACIÓN EXITOSA ===');
+                res.json({ success: true, message: 'Credenciales válidas', role });
+                return;
+            } else {
+                console.log('Rol inválido');
+                res.status(403).json({ error: 'Rol no autorizado' });
+                return;
+            }
+        } else {
+            console.log('Password no coincide');
+            res.status(401).json({ error: 'Credenciales de supervisor incorrectas' });
+            return;
+        }
+    } catch (err) {
+        console.error('Error en validateSupervisor:', err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Cargar datos de revisión (sin cambios)
+const getInspeccionReviewData = async (req, res) => {
+    const { operacionId, loteId } = req.params;
+    try {
+        const [review] = await dbRegistracionNET.raw("EXEC SP_TraerInspeccionSlitter @Operacion_ID=?, @Lote_ID=?", [operacionId, loteId]);
+        res.json({
+            retenido: review?.Retenido || '',
+            seleccion: review?.Seleccion || '',
+            retrabajo: review?.Retrabajo || '',
+            rechazado: review?.Rechazado || '',
+            iniciaCorte: review?.IniciaCorte === 1,
+            finalizaOperacion: review?.FinalizaOperacion === 1,
+            observaCalidad: review?.ObservacionCalidad || '',
+            observaciones: review?.Observaciones || ''
+        });
+    } catch (err) {
+        console.error('Error en getInspeccionReviewData:', err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Actualizar Inspección Supervisor (con validación integrada si es necesario)
+// Actualizar Inspección Supervisor (FIX: Mapear observaCalidad y observaciones de req.body)
+const updateInspeccionSupervisor = async (req, res) => {
+    const { operacionId, loteId } = req.params;
+    const { retenido, seleccion, retrabajo, rechazado, iniciaCorte, finalizaOperacion, observaCalidad, observaciones, origen } = req.body; // FIX: Recibe observaCalidad y observaciones de formData
+    try {
+        console.log('=== DEBUG UPDATE SUPERVISOR ===');
+        console.log('Params recibidos:', { operacionId, loteId, retenido: '***', seleccion: '***', retrabajo: '***', rechazado: '***', iniciaCorte, finalizaOperacion, observaCalidad: '***', observaciones: '***', origen });
+        
+        // FIX: Mapear a nombres del SP
+        const params = [
+            operacionId,
+            loteId,
+            retenido || '',
+            seleccion || '',
+            retrabajo || '',
+            rechazado || '',
+            observaciones || '', // @Observaciones = observaciones de formData
+            iniciaCorte ? 1 : 0,
+            finalizaOperacion ? 1 : 0,
+            observaCalidad || '', // @ObservacionCalidad = observaCalidad de formData (FIX: era undefined)
+            origen || 'Supervisor'
+        ];
+        console.log('Array de params (11 items):', params.length); // Debe ser 11
+        
+        await dbRegistracionNET.raw(`
+            EXEC SP_EditarInspeccionSlitter 
+            @Operacion_ID=?, @Lote_ID=?, @Retenido=?, @Seleccion=?, @Retrabajo=?, @Rechazado=?, 
+            @Observaciones=?, @IniciaCorte=?, @FinalizaOperacion=?, @ObservacionCalidad=?, @Origen=?
+        `, params);
+        
+        console.log('=== UPDATE EXITOSO ===');
+        res.json({ success: true, message: 'Revisión actualizada' });
+    } catch (err) {
+        console.error('Error en updateInspeccionSupervisor:', err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Actualizar Inspección Calidad (sin cambios)
+const updateInspeccionCalidad = async (req, res) => {
+    const { operacionId, loteId } = req.params;
+    const { observacionCalidad, origen } = req.body;
+    try {
+        await dbRegistracionNET.raw(`
+            EXEC SP_EditarInspeccionSlitter 
+            @Operacion_ID=?, @Lote_ID=?, @Retenido='', @Seleccion='', @Retrabajo='', @Rechazado='',
+            @Observaciones='', @IniciaCorte=1, @FinalizaOperacion=1, @ObservacionCalidad=?, @Origen=?
+        `, [operacionId, loteId, observacionCalidad, origen]);
+        res.json({ success: true, message: 'Observación actualizada' });
+    } catch (err) {
+        console.error('Error en updateInspeccionCalidad:', err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// Para btnForzarFinal (agregar si es necesario un endpoint separado)
+const forceFinalInspeccion = async (req, res) => {
+    // Implementar lógica de SP_InsertarInspeccionSlitter si no existe + set flags to 1
+    // ...
+    res.json({ success: true });
+};
+
+// Guardar/Actualizar Pasada (FIX: Defaults para params missing, como VB)
+const saveInspeccionPasada = async (req, res) => {
+    const { operacionId, loteId, nroPasada } = req.params;
+    const {
+        identificacionBobina = 0, espesorBLM = 0, espesorC = 0, espesorBLO = 0, anchoRealBobina = 0, aparienciaCaraSuperior = '',
+        aparienciaCaraInferior1 = 0, aparienciaCaraInferior2 = 0, aparienciaCaraInferior3 = 0, aparienciaCaraInferior4 = 0, aparienciaCaraInferior5 = 0,
+        camber = 0, diametroInterno = 0, diametroExterno = 0, desplazamientoEspiras = 0, anchosDeCorte = [], tipo = 'A', usuario = 'admin'
+    } = req.body; // FIX: Defaults = 0 o '' para missing
+
+    const transaction = await dbRegistracionNET.transaction();
+    try {
+        console.log('=== DEBUG SAVE PASADA ===');
+        console.log('Params:', { operacionId, loteId, nroPasada, diametroExterno, anchosDeCorteLength: anchosDeCorte.length });
+
+        // Eliminar pasada y anchos existentes (como en VB)
+        await transaction.raw("EXEC SP_EliminarInspeccionSlitterPasadas @Operacion_ID=?, @Lote_ID=?, @NroPasada=?", [operacionId, loteId, nroPasada]);
+
+        // Insertar pasada nueva (21 params como VB)
+        const paramsPasada = [
+            operacionId, loteId, nroPasada,
+            parseInt(identificacionBobina) || 0, // Bit
+            parseFloat(espesorBLM) || 0, parseFloat(espesorC) || 0, parseFloat(espesorBLO) || 0,
+            parseFloat(anchoRealBobina) || 0, aparienciaCaraSuperior || '',
+            parseInt(aparienciaCaraInferior1) || 0, parseInt(aparienciaCaraInferior2) || 0,
+            parseInt(aparienciaCaraInferior3) || 0, parseInt(aparienciaCaraInferior4) || 0, parseInt(aparienciaCaraInferior5) || 0,
+            parseFloat(camber) || 0, parseFloat(diametroInterno) || 0, parseFloat(diametroExterno) || 0, parseFloat(desplazamientoEspiras) || 0,
+            usuario, new Date().toISOString(), tipo
+        ];
+        await transaction.raw(`
+            EXEC SP_InsertarInspeccionSlitterPasadas 
+            @Operacion_ID=?, @Lote_ID=?, @NroPasada=?, @IdentificacionBobina=?, @EspesorBLM=?, @EspesorC=?, @EspesorBLO=?,
+            @AnchoRealBobina=?, @AparienciaCaraSuperior=?, @AparienciaCaraInferior1=?, @AparienciaCaraInferior2=?,
+            @AparienciaCaraInferior3=?, @AparienciaCaraInferior4=?, @AparienciaCaraInferior5=?, @Camber=?, @DiametroInterno=?,
+            @DiametroExterno=?, @DesplazamientoEspiras=?, @Usuario=?, @FecReg=?, @Tipo=?
+        `, paramsPasada);
+
+        // Insertar anchos de corte (si hay)
+        for (const ancho of anchosDeCorte) {
+            await transaction.raw(`
+                EXEC SP_InsertarInspeccionSlitterAnchos 
+                @Operacion_ID=?, @Lote_ID=?, @NroPasada=?, @AnchoCorte=?, @ItemAncho=?
+            `, [operacionId, loteId, nroPasada, parseFloat(ancho.valor) || 0, parseInt(ancho.item) || 0]);
+        }
+
+        await transaction.commit();
+        console.log('=== PASADA GUARDADA EXITOSA ===');
+        res.json({ success: true, message: 'Pasada guardada correctamente' });
+    } catch (err) {
+        await transaction.rollback();
+        console.error('Error en saveInspeccionPasada:', err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
+// New: Fetch label data for print (combines ficha + operation data)
+const getLabelData = async (req, res) => {
+    const { operacionId, atadoId, nroEtiqueta } = req.params;
+    try {
+        // Fetch from existing SPs
+        const [operacion] = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradas @Operacion_ID=?", [operacionId]);
+        const [ficha] = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [operacion.Lote_ID]);
+
+        const labelData = {
+            parSerieLote: operacion.Lote_ID || 'DEFAULT',
+            parNroAtado: atadoId,
+            parNroEtiqueta: nroEtiqueta,
+            // ... map more fields from operacion/ficha
+            parCliente: operacion.Clientes,
+            parFecha: formatDateDDMMYYYY(new Date()),
+            // ...
+        };
+
+        res.json(labelData);
+    } catch (error) {
+        res.status(500).json({ error: 'Error fetching label data' });
+    }
+};
+
+const obtenerAtadosSobrante = async (req, res) => {
+    console.log("ENTRANDO EN OBTENER SOBRANTE------");
+    
+    const { operacionId } = req.body;
+    console.log("operacionId    ", operacionId);
+    
+    // Validar GUID
+    const guidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
+    if (!operacionId || !guidRegex.test(operacionId)) {
+        return res.status(400).json({ error: 'operacionId inválido o faltante.' });
+    }
+
+    try {
+        const query = `
+            SELECT 
+                Atado,
+                Rollos,
+                Peso,
+                Calidad,
+                Etiqueta
+            FROM [RegistracionNET].[dbo].[Atados]
+            WHERE Operacion_ID = ? AND Sobrante = 1
+        `;
+
+        console.log("SQL Query:", query); 
+        console.log("Query Parameters:", [operacionId]); 
+
+        const result = await dbRegistracionNET.raw(query, [operacionId]);
+
+        console.log("Raw query result: ", result); // Esto es lo que nos dio la pista
+
+        let atados = [];
+        
+        // ✅ CORRECCIÓN CLAVE: result es directamente el array de filas
+        if (result && Array.isArray(result)) { // Verificamos si 'result' es un array
+            atados = result; // Si es un array (incluso vacío), lo asignamos directamente
+        } else {
+            // Esto es un caso más inusual, pero asegura que siempre sea un array.
+            console.warn("La consulta raw no devolvió un array. Enviando un array vacío.");
+            atados = []; 
+        }
+
+        console.log("Processed atados (ready to send): ", atados);
+        
+        res.status(200).json(atados);
+
+    } catch (error) {
+        console.error('Error al obtener atados de sobrante:', error);
+        console.error('Full error stack:', error.stack); 
+        res.status(500).json({ error: 'Error interno del servidor al obtener los atados de sobrante.' });
+    }
+};
+
 
 module.exports = {
     getMaquinas,
@@ -1105,6 +1681,16 @@ module.exports = {
     registrarPesaje,
     resetPesaje,
     obtenerAtadosRegistrados,
+    obtenerRegistroScrapNoSeriado,
     obtenerYActualizarEtiqueta,
-    obtenerUltimaEtiqueta
+    obtenerUltimaEtiqueta,
+    validateSupervisor,
+    getInspeccionReviewData,
+    updateInspeccionSupervisor,
+    updateInspeccionCalidad,
+    forceFinalInspeccion,
+    saveInspeccionPasada,
+    getLabelData,
+    getCodigoProductoMerma,
+    obtenerAtadosSobrante
 };
