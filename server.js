@@ -14,18 +14,44 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://192.168.10.69',
 ];
+// const corsOptions = {
+//   origin: function (origin, callback) {
+//     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+//       callback(null, true);
+//     } else {
+//       callback(new Error('La política de CORS no permite el acceso desde este origen.'));
+//     }
+//   },
+//   optionsSuccessStatus: 200
+// };
+// En server.js, en la configuración de CORS
 const corsOptions = {
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('La política de CORS no permite el acceso desde este origen.'));
-    }
-  },
-  optionsSuccessStatus: 200
+    origin: function (origin, callback) {
+        if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            console.log('❌ Origen bloqueado por CORS:', origin);
+            callback(new Error('La política de CORS no permite el acceso desde este origen.'));
+        }
+    },
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    optionsSuccessStatus: 200
 };
 app.use(cors(corsOptions));
 app.use(express.json());
+
+// En server.js, justo después de app.use(express.json());
+
+app.use((req, res, next) => {
+    console.log(`🔵 [${new Date().toISOString()}] ${req.method} ${req.url}`);
+    console.log(`🔵 Body:`, req.body);
+    console.log(`🔵 Params:`, req.params);
+    console.log(`🔵 Query:`, req.query);
+    console.log('---');
+    next();
+});
 
 // ===== INICIO DE LA CORRECCIÓN CLAVE =====
 // --- Importar Middleware y Rutas ---
