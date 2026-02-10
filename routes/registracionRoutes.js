@@ -26,6 +26,7 @@ const {
     updateInspeccionCalidad,
     forceFinalInspeccion,
     saveInspeccionPasada,
+    saveInspeccionHeader,
     getLabelData,
     getCodigoProductoMerma,
     obtenerAtadosSobrante,
@@ -83,6 +84,8 @@ router.post('/operaciones/cerrar/:operacionId', (req, res) => {
 
 
 router.post('/inspeccion/save-pasada/:operacionId/:loteId/:nroPasada', saveInspeccionPasada);
+router.post('/inspeccion/save-header/:operacionId/:loteId', saveInspeccionHeader); 
+
 router.get("/pesaje/imprimir-etiqueta/:operacionId/:atadoId/:nroEtiqueta", getLabelData);
 
 router.get("/pesaje/codigo-merma/:operacionId", getCodigoProductoMerma);

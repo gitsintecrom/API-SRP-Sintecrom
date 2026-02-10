@@ -631,79 +631,68 @@ const getInspeccionData = async (req, res) => {
     const { operacionId, loteId } = req.params;
 
     try {
-        // --- PASO 1 y 2 (Sin cambios) ---
+        // 1. Buscamos la información de la máquina y la operación principal
         const [opMaquinaInfo] = await dbRegistracionNET.raw("SELECT Maquina FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
-        if (!opMaquinaInfo) return res.status(404).json({ error: "Máquina no encontrada." });
-        const maquinaId = opMaquinaInfo.Maquina;
+        const maquinaId = opMaquinaInfo?.Maquina || 'SL';
+        
         const spName = (maquinaId === 'EMB') ? 'SP_TraerOperacionesPorMaquinaEmbalaje' : 'SP_TraerOperacionesPorMaquina';
         const todasLasOperaciones = await dbRegistracionNET.raw(`EXEC ${spName} @Maquina=?`, [maquinaId]);
         const operacionPrincipal = todasLasOperaciones.find(op => op.Operacion_ID === operacionId);
-        if (!operacionPrincipal) { return res.status(404).json({ error: "Operación Principal no encontrada." }); }
+
+        if (!operacionPrincipal) return res.status(404).json({ error: "Operación no encontrada." });
+
+        // 2. Traemos el encabezado de inspección
         const [inspeccionGral] = await dbRegistracionNET.raw("EXEC SP_TraerInspeccionSlitter @Operacion_ID=?, @Lote_ID=?", [operacionId, loteId]);
 
-        // --- PASO 3: OBTENER DATOS DE PASADAS Y ANCHOS ---
         const conceptos = ["Identificación de la Bobina", "Espesor B.L.M.(mm)", "Espesor C.(mm)", "Espesor B.L.O.(mm)", "Ancho de Bobina o Precorte(mm)", "Apariencia Cara Superior", "Apariencia Cara Inferior Ini", "Apariencia Cara Inferior 1/4", "Apariencia Cara Inferior 1/2", "Apariencia Cara Inferior 3/4", "Apariencia Cara Inferior Fin", "Camber (mm/m)", "Diámetro Interno(mm)", "Diámetro Externo(mm)", "Desplazamiento de Espiras(mm)"];
         let pasadasData = {};
-        const maxPasadas = 5;
 
-        for (let i = 1; i <= maxPasadas; i++) {
+        for (let i = 1; i <= 5; i++) {
             const pasadaResult = await dbRegistracionNET.raw("EXEC SP_TraerInspeccionSlitterPasadas @Operacion_ID=?, @Lote_ID=?, @NroPasada=?", [operacionId, loteId, i]);
-            
             if (pasadaResult && pasadaResult.length > 0) {
                 const pData = pasadaResult[0];
                 let anchosResult = await dbRegistracionNET.raw("EXEC SP_TraerInspeccionSlitterAnchos @Operacion_ID=?, @Lote_ID=?, @NroPasada=?", [operacionId, loteId, i]);
+                if (anchosResult && anchosResult.length > 0) anchosResult.sort((a, b) => a.AnchoCorte - b.AnchoCorte);
 
-                // ===== CORRECCIÓN CLAVE AQUÍ: Ordenamos por AnchoCorte ASCENDENTE =====
-                if (anchosResult && anchosResult.length > 0) {
-                    anchosResult.sort((a, b) => a.AnchoCorte - b.AnchoCorte);
-                }
-
+                const esCorresponde = (pData.IdentificacionBobina == 0 || pData.IdentificacionBobina === false);
                 pasadasData[i] = {
-                    identificacionBobina: pData.IdentificacionBobina === 0 ? 'C' : 'C',
-                    espesorBLM: pData.EspesorBLM,
-                    espesorC: pData.EspesorC,
-                    espesorBLO: pData.EspesorBLO,
-                    anchoRealBobina: pData.AnchoRealBobina,
-                    aparienciaCaraSuperior: pData.AparienciaCaraSuperior,
-                    aparienciaCaraInferiorIni: pData.AparienciaCaraInferior1 === 1 ? 'OK' : '',
-                    aparienciaCaraInferior14: pData.AparienciaCaraInferior2 === 1 ? 'OK' : '',
-                    aparienciaCaraInferior12: pData.AparienciaCaraInferior3 === 1 ? 'OK' : '',
-                    aparienciaCaraInferior34: pData.AparienciaCaraInferior4 === 1 ? 'OK' : '',
-                    aparienciaCaraInferiorFin: pData.AparienciaCaraInferior5 === 1 ? 'OK' : '',
-                    camber: pData.Camber,
-                    diametroInterno: pData.DiametroInterno,
-                    diametroExterno: pData.DiametroExterno,
-                    desplazamientoEspiras: pData.DesplazamientoEspiras,
+                    identificacionBobina: esCorresponde ? 'C' : 'NC',
+                    espesorBLM: pData.EspesorBLM, espesorC: pData.EspesorC, espesorBLO: pData.EspesorBLO,
+                    anchoRealBobina: pData.AnchoRealBobina, aparienciaCaraSuperior: pData.AparienciaCaraSuperior,
+                    aparienciaCaraInferiorIni: pData.AparienciaCaraInferior1 === 1,
+                    aparienciaCaraInferior14: pData.AparienciaCaraInferior2 === 1,
+                    aparienciaCaraInferior12: pData.AparienciaCaraInferior3 === 1,
+                    aparienciaCaraInferior34: pData.AparienciaCaraInferior4 === 1,
+                    aparienciaCaraInferiorFin: pData.AparienciaCaraInferior5 === 1,
+                    camber: pData.Camber, diametroInterno: pData.DiametroInterno,
+                    diametroExterno: pData.DiametroExterno, desplazamientoEspiras: pData.DesplazamientoEspiras,
                     anchosDeCorte: anchosResult.map(a => ({ item: a.ItemAncho, valor: a.AnchoCorte }))
                 };
             }
         }
 
-        // --- PASO 4: ENSAMBLAR RESPUESTA FINAL (CORREGIDO: Formateo de serieLote) ---
-        const anchosPlantilla = operacionPrincipal.Operacion_Cuchillas.split('/').map(s => parseFloat(s.trim()));
-        const responseData = {
+        // --- LÓGICA DE HERENCIA: Si no hay inspección guardada, usamos datos de Calipso ---
+        const serieLoteDefault = operacionPrincipal.Origen_Lote ? operacionPrincipal.Origen_Lote.split(' - ').slice(0, 2).join(' - ') : "";
+        const batchDefault = operacionPrincipal.NroBatch || "";
+
+        res.status(200).json({
             header: {
-                maquina: operacionPrincipal.Maquina || 'Slitter',
-                fecha: formatDateDDMMYYYY(inspeccionGral?.Fecha),
-                serieLote: inspeccionGral?.Bobina || (operacionPrincipal.Origen_Lote ? operacionPrincipal.Origen_Lote.split(' - ').slice(0, 2).join(' - ') : 'No disponible'), // CORRECCIÓN: Campo correcto + formateo
-                ordenProduccion: operacionPrincipal.NroBatch,
+                fecha: inspeccionGral?.Fecha ? new Date(inspeccionGral.Fecha).toLocaleDateString('es-AR') : new Date().toLocaleDateString('es-AR'),
+                serieLote: inspeccionGral?.Bobina || serieLoteDefault, // <--- REPARADO
+                ordenProduccion: inspeccionGral?.OrdenProduccion || batchDefault, // <--- REPARADO
                 rolloEntrante: inspeccionGral?.RolloEntrante || 1,
-                cantPasadas: inspeccionGral?.CantPasada || parseInt(operacionPrincipal.Pasadas_Origen, 10) || 1,
-                cantFlejes: inspeccionGral?.CantFlejes || anchosPlantilla.length || 3,
-                observaciones: inspeccionGral?.Observaciones || '',
+                cantPasadas: inspeccionGral?.CantPasada || parseInt(operacionPrincipal.Pasadas_Origen) || 1,
+                cantFlejes: inspeccionGral?.CantFlejes || 3,
+                observaciones: inspeccionGral?.Observaciones || "",
                 inicioRevisado: inspeccionGral?.IniciaCorte === 1,
                 finalRevisado: inspeccionGral?.FinalizaOperacion === 1,
             },
             conceptos,
             pasadasData
-        };
-        
-        res.status(200).json(responseData);
-
+        });
     } catch (error) {
-        console.error(`\n[ERROR CRÍTICO] en getInspeccionData para OpID: ${operacionId}`);
-        console.error("Error capturado:", error);
-        res.status(500).json({ error: "Error interno del servidor al obtener datos de inspección.", details: error.message });
+        console.error("Error en getInspeccionData:", error);
+        res.status(500).json({ error: error.message });
     }
 };
 
@@ -997,237 +986,6 @@ const updateOperacion = async (req, res) => {
         res.status(500).json({ error: "No se pudo actualizar la operación.", details: error.message });
     }
 };
-
-
-// const registrarPesaje = async (req, res) => {
-//     const { operacionId, loteIds, sobrante, atados } = req.body;
-//     const lineaData = req.body.lineaData || {};
-
-//     console.log("Datos: ", sobrante);
-//     console.log("Tipo de peso: ", typeof(atados[0].peso));
-    
-//     console.log("lineaData ", lineaData);
-
-//     console.log("Body ", req.body);
-
-    
-//     if (!operacionId) {
-//         return res.status(400).json({ error: "operacionId es requerido." });
-//     }
-//     if (!atados || !Array.isArray(atados) || atados.length === 0) {
-//         return res.status(400).json({ error: "Debe proporcionar al menos un atado." });
-//     }
-
-//     const validateGuid = (value) => {
-//         if (!value || value === '' || value === null || value === undefined) return null;
-//         const guidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i;
-//         return guidRegex.test(value.toString()) ? value.toString() : null;
-//     };
-
-//     const validOperacionId = validateGuid(operacionId);
-//     if (!validOperacionId) {
-//         return res.status(400).json({ error: "operacionId inválido." });
-//     }
-
-//     let sobreOrdenTotal = 0;
-//     let calidadTotal = 0;
-//     for (const atado of atados) {
-//         const peso = parseFloat(atado.peso) || 0;
-//         if (atado.esCalidad) {
-//             calidadTotal += peso;
-//         } else {
-//             sobreOrdenTotal += peso;
-//         }
-//     }
-
-//     if (sobreOrdenTotal + calidadTotal <= 0) {
-//         return res.status(400).json({ error: "No puede registrar sin kilos." });
-//     }
-
-//     const transaction = await dbRegistracionNET.transaction();
-
-    
-//     try {
-//         const [estadoOp] = await transaction.raw("EXEC SP_TraerEstadoOperaciones @Operacion_ID=?", [validOperacionId]);
-
-//         console.log("estadoOp ", estadoOp);
-
-//         if (estadoOp && estadoOp.Estado === '2') {
-//             throw new Error("La Operación ya fue CERRADA. No se puede registrar.");
-//         }
-
-//         // ✅ LÓGICA CORREGIDA
-//         let loteIDSFinal = lineaData.LoteID;
-//         let destinoLoteFinal = '';
-
-//         if (sobrante === 2) {
-//             // SCRAP
-//             if (lineaData?.bScrapNoSeriado) {
-//                 // Scrap No Seriado: usa GUID mágico, NO llama a merma
-//                 loteIDSFinal = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
-//                 destinoLoteFinal = 'Scrap No Seriado';
-//             } else {
-//                 // Scrap Seriado: llama a merma
-//                 const [scrapLote] = await transaction.raw(
-//                     "EXEC SP_TraerLotesDisponiblesScrap @CodSerie=?",
-//                     [lineaData?.CodigoProductoS || '']
-//                 );
-//                 console.log("scrapLote  ----------    ", scrapLote);
-//                 console.log("lineaData?.DestinoLote    ", lineaData?.DestinoLote);
-//                 console.log("Lote_ID   ", lineaData?.LoteID);
-                
-                
-//                 // if (!scrapLote || !Array.isArray(scrapLote) || scrapLote.length === 0) {
-//                 //     throw new Error("No se han programado kilos de Merma. NO puede registrar por Scrap.");
-//                 // }
-
-//                 loteIDSFinal = lineaData?.LoteID;
-//                 destinoLoteFinal = lineaData?.DestinoLote;
-
-//                 await transaction.raw(
-//                     "EXEC SP_EditarLotesDisponiblesScrap @Lote_IDS=?, @Usado=1",
-//                     [loteIDSFinal]
-//                 );
-//             }
-//         } else if (sobrante === 1) {
-//             // SOBRANTE: siempre null
-//             loteIDSFinal = lineaData.LoteID;
-//             destinoLoteFinal = lineaData?.DestinoLote || lineaData?.SerieLote;
-//             console.log("Entro en sobrante");
-            
-//         } else {
-//             // LÍNEA NORMAL
-//             loteIDSFinal = validateGuid(loteIds);
-//             destinoLoteFinal = lineaData?.DestinoLote || lineaData?.SerieLote || '';
-//         }
-
-//         // Verificar modificación
-//         const [existingReg] = await transaction.raw(
-//             "EXEC SP_TraerOperacionesRegistradas @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?",
-//             [validOperacionId, loteIDSFinal, sobrante]
-//         );
-//         const esModificacion = existingReg && existingReg.length > 0;
-
-//         if (esModificacion) {
-//             await transaction.raw(
-//                 "EXEC SP_EliminarAtadosRegistrados @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?",
-//                 [validOperacionId, loteIDSFinal, sobrante]
-//             );
-//         }
-
-//         console.log("Sobrante ..........................", sobrante);
-//         console.log("Linea Data Scrap No Seriado .......", lineaData?.bScrapNoSeriado);
-
-//         if (sobrante !== 0 && !lineaData?.bScrapNoSeriado) {
-
-//             console.log("Guarda atados .........");
-            
-            
-//             // Insertar atados
-//             let etiquetaCounter = 1;
-//             const atadosConEtiqueta = atados.map(atado => ({
-//                 ...atado,
-//                 nroEtiqueta: atado.nroEtiqueta && atado.nroEtiqueta !== 0 ? atado.nroEtiqueta : etiquetaCounter++
-//             }));
-    
-//             for (const atado of atadosConEtiqueta) {
-//                 await transaction.raw(
-//                     "EXEC SP_InsertarAtados @Operacion_ID=?, @Destino_Lote=?, @Atado=?, @Rollos=?, @Lote_IDS=?, @Sobrante=?, @Peso=?, @Calidad=?, @Etiqueta=?",
-//                     [
-//                         validOperacionId,
-//                         destinoLoteFinal,
-//                         atado.atado,
-//                         atado.rollos,
-//                         loteIDSFinal,
-//                         sobrante,
-//                         parseFloat(atado.peso),
-//                         atado.esCalidad ? 1 : 0,
-//                         atado.nroEtiqueta
-//                     ]
-//                 );
-//             }
-//         }
-
-//         const atadosConEtiqueta = [];
-
-//         if (sobrante !== 0 && lineaData?.bScrapNoSeriado) {
-//             lineaData.Tarea = lineaData.Maquina+' CORTE';
-//         }
-
-
-//         // Insertar/Editar registración principal
-//         const paramsReg = [
-//             validOperacionId,
-//             lineaData.Tarea ,
-//             lineaData.Maquina || '',
-//             lineaData.NroBatch || '',
-//             lineaData.Cuchillas || '',
-//             lineaData.CodigoProducto || '',
-//             lineaData.CodigoProductoS || '',
-//             validateGuid(lineaData.LoteID || ''),
-//             lineaData.Programados || 0,
-//             sobreOrdenTotal,
-//             calidadTotal,
-//             '1',
-//             sobrante,
-//             loteIDSFinal,
-//             '0',
-//             destinoLoteFinal,
-//             lineaData.NroMatching || '',
-//             '0',
-//             atadosConEtiqueta.length,
-//             atadosConEtiqueta.reduce((sum, a) => sum + a.rollos, 0),
-//             'admin',
-//             new Date().toISOString(),
-//             'N'
-//         ];
-
-
-//         console.log("paramsReg .........", paramsReg);
-        
-
-//         if (esModificacion) {
-//             await transaction.raw(
-//                 "EXEC SP_EditarOperacionesRegistradas ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
-//                 [
-//                     validOperacionId,
-//                     sobreOrdenTotal,
-//                     calidadTotal,
-//                     '1',
-//                     '0',
-//                     loteIDSFinal,
-//                     sobrante,
-//                     'N',
-//                     '0',
-//                     atadosConEtiqueta.length,
-//                     atadosConEtiqueta.reduce((sum, a) => sum + a.rollos, 0)
-//                 ]
-//             );
-//         } else {
-//             await transaction.raw(
-//                 "EXEC SP_InsertarRegistracion ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?",
-//                 paramsReg
-//             );
-//         }
-
-//         await transaction.commit();
-//         res.status(200).json({
-//             success: true,
-//             message: esModificacion ? 'Pesaje modificado correctamente.' : 'Pesaje registrado correctamente.',
-//             sobreOrdenTotal,
-//             calidadTotal,
-//             totalAtados: atadosConEtiqueta.length,
-//             totalRollos: atadosConEtiqueta.reduce((sum, a) => sum + a.rollos, 0)
-//         });
-
-//     } catch (error) {
-//         await transaction.rollback();
-//         console.error("Error al registrar pesaje:", error);
-//         res.status(500).json({ error: error.message || "Error al registrar el pesaje." });
-//     }
-
-    
-// };
 
 const registrarPesaje = async (req, res) => {
     const { operacionId, loteIds, sobrante, atados, usuario } = req.body;
@@ -1602,7 +1360,6 @@ const getInspeccionReviewData = async (req, res) => {
 };
 
 // Actualizar Inspección Supervisor (con validación integrada si es necesario)
-// Actualizar Inspección Supervisor (FIX: Mapear observaCalidad y observaciones de req.body)
 const updateInspeccionSupervisor = async (req, res) => {
     const { operacionId, loteId } = req.params;
     const { retenido, seleccion, retrabajo, rechazado, iniciaCorte, finalizaOperacion, observaCalidad, observaciones, origen } = req.body; // FIX: Recibe observaCalidad y observaciones de formData
@@ -1667,54 +1424,128 @@ const forceFinalInspeccion = async (req, res) => {
 // Guardar/Actualizar Pasada (FIX: Defaults para params missing, como VB)
 const saveInspeccionPasada = async (req, res) => {
     const { operacionId, loteId, nroPasada } = req.params;
-    const {
-        identificacionBobina = 0, espesorBLM = 0, espesorC = 0, espesorBLO = 0, anchoRealBobina = 0, aparienciaCaraSuperior = '',
-        aparienciaCaraInferior1 = 0, aparienciaCaraInferior2 = 0, aparienciaCaraInferior3 = 0, aparienciaCaraInferior4 = 0, aparienciaCaraInferior5 = 0,
-        camber = 0, diametroInterno = 0, diametroExterno = 0, desplazamientoEspiras = 0, anchosDeCorte = [], tipo = 'A', usuario = 'admin'
-    } = req.body; // FIX: Defaults = 0 o '' para missing
+    const { header, pasadaData, usuario = 'admin' } = req.body;
 
+    console.log(`=== INICIO GUARDADO PASADA ${nroPasada} (FORZANDO HORA LOCAL) ===`);
+    
     const transaction = await dbRegistracionNET.transaction();
     try {
-        console.log('=== DEBUG SAVE PASADA ===');
-        console.log('Params:', { operacionId, loteId, nroPasada, diametroExterno, anchosDeCorteLength: anchosDeCorte.length });
+        // 1. GENERAR HORA ARGENTINA MANUAL (Formato: YYYY-MM-DD HH:mm:ss)
+        // Usamos una técnica que no depende del objeto Date de SQL para evitar desfases
+        const ahora = new Date();
+        const argTime = new Date(ahora.getTime() - (3 * 60 * 60 * 1000)); // Restamos 3 horas exactas (GMT-3)
+        const fechaLocalArg = argTime.toISOString().slice(0, 19).replace('T', ' '); 
+        
+        console.log("Hora calculada para Argentina:", fechaLocalArg);
 
-        // Eliminar pasada y anchos existentes (como en VB)
+        // 2. Limpieza de fecha de PRODUCCIÓN
+        let fechaProduccionSql = fechaLocalArg.split(' ')[0]; 
+        if (header.fecha && header.fecha.includes('/')) {
+            const [dia, mes, anio] = header.fecha.split('/');
+            fechaProduccionSql = `${anio}-${mes}-${dia}`;
+        }
+
+        // --- PASO 1: HEADER GENERAL ---
+        const registroExistente = await transaction.raw(
+            `SELECT TOP 1 1 FROM InspeccionSlitter WHERE Operacion_ID = ? AND Lote_ID = ?`,
+            [operacionId, loteId]
+        );
+
+        if (registroExistente.length === 0) {
+            console.log("-> Insertando Header nuevo...");
+            const pInsert = [
+                operacionId, loteId, parseInt(header.cantPasadas) || 1,
+                fechaProduccionSql, header.serieLote || "", header.ordenProduccion || "",
+                parseInt(header.rolloEntrante) || 1, "", "", "", "", 
+                usuario, fechaLocalArg, header.observaciones || "", String(header.cantFlejes || "0")
+            ];
+            await transaction.raw(`EXEC dbo.SP_InsertarInspeccionSlitter ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?`, pInsert);
+        } else {
+            console.log("-> Actualizando Header existente...");
+            const pUpdate = [
+                operacionId, loteId, fechaProduccionSql,
+                header.serieLote || "", header.ordenProduccion || "",
+                parseInt(header.rolloEntrante) || 1, parseInt(header.cantPasadas) || 1,
+                header.observaciones || "", String(header.cantFlejes || "0")
+            ];
+            await transaction.raw(`EXEC dbo.SP_EditarInspeccionSlitterGral ?,?,?,?,?,?,?,?,?`, pUpdate);
+            
+            // !!! CLAVE: Como el SP no actualiza la fecha, la actualizamos nosotros a mano !!!
+            await transaction.raw(
+                `UPDATE InspeccionSlitter SET FecReg = ? WHERE Operacion_ID = ? AND Lote_ID = ?`,
+                [fechaLocalArg, operacionId, loteId]
+            );
+        }
+
+        // --- PASO 2: LIMPIAR PASADA ---
         await transaction.raw("EXEC SP_EliminarInspeccionSlitterPasadas @Operacion_ID=?, @Lote_ID=?, @NroPasada=?", [operacionId, loteId, nroPasada]);
 
-        // Insertar pasada nueva (21 params como VB)
-        const paramsPasada = [
-            operacionId, loteId, nroPasada,
-            parseInt(identificacionBobina) || 0, // Bit
-            parseFloat(espesorBLM) || 0, parseFloat(espesorC) || 0, parseFloat(espesorBLO) || 0,
-            parseFloat(anchoRealBobina) || 0, aparienciaCaraSuperior || '',
-            parseInt(aparienciaCaraInferior1) || 0, parseInt(aparienciaCaraInferior2) || 0,
-            parseInt(aparienciaCaraInferior3) || 0, parseInt(aparienciaCaraInferior4) || 0, parseInt(aparienciaCaraInferior5) || 0,
-            parseFloat(camber) || 0, parseFloat(diametroInterno) || 0, parseFloat(diametroExterno) || 0, parseFloat(desplazamientoEspiras) || 0,
-            usuario, new Date().toISOString(), tipo
+        // --- PASO 3: INSERTAR PASADA ---
+        const identBobina = pasadaData.identificacionBobina === 'C' ? 0 : 1;
+        const pPasada = [
+            operacionId, loteId, nroPasada, identBobina,
+            parseFloat(pasadaData.espesorBLM) || 0, parseFloat(pasadaData.espesorC) || 0, parseFloat(pasadaData.espesorBLO) || 0,
+            parseFloat(pasadaData.anchoRealBobina) || 0, pasadaData.aparienciaCaraSuperior || '',
+            pasadaData.aparienciaCaraInferiorIni ? 1 : 0, parseFloat(pasadaData.camber) || 0,
+            pasadaData.aparienciaCaraInferior14 ? 1 : 0, pasadaData.aparienciaCaraInferior12 ? 1 : 0, 
+            pasadaData.aparienciaCaraInferior34 ? 1 : 0, pasadaData.aparienciaCaraInferiorFin ? 1 : 0, 
+            parseFloat(pasadaData.diametroInterno) || 0, parseFloat(pasadaData.diametroExterno) || 0, parseFloat(pasadaData.desplazamientoEspiras) || 0,
+            usuario, fechaLocalArg, 'A'
         ];
-        await transaction.raw(`
-            EXEC SP_InsertarInspeccionSlitterPasadas 
-            @Operacion_ID=?, @Lote_ID=?, @NroPasada=?, @IdentificacionBobina=?, @EspesorBLM=?, @EspesorC=?, @EspesorBLO=?,
-            @AnchoRealBobina=?, @AparienciaCaraSuperior=?, @AparienciaCaraInferior1=?, @AparienciaCaraInferior2=?,
-            @AparienciaCaraInferior3=?, @AparienciaCaraInferior4=?, @AparienciaCaraInferior5=?, @Camber=?, @DiametroInterno=?,
-            @DiametroExterno=?, @DesplazamientoEspiras=?, @Usuario=?, @FecReg=?, @Tipo=?
-        `, paramsPasada);
 
-        // Insertar anchos de corte (si hay)
-        for (const ancho of anchosDeCorte) {
-            await transaction.raw(`
-                EXEC SP_InsertarInspeccionSlitterAnchos 
-                @Operacion_ID=?, @Lote_ID=?, @NroPasada=?, @AnchoCorte=?, @ItemAncho=?
-            `, [operacionId, loteId, nroPasada, parseFloat(ancho.valor) || 0, parseInt(ancho.item) || 0]);
+        await transaction.raw(`EXEC SP_InsertarInspeccionSlitterPasadas ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?`, pPasada);
+
+        // --- PASO 4: ANCHOS ---
+        if (pasadaData.anchosDeCorte && Array.isArray(pasadaData.anchosDeCorte)) {
+            for (const ancho of pasadaData.anchosDeCorte) {
+                await transaction.raw(`EXEC SP_InsertarInspeccionSlitterAnchos ?,?,?,?,?`, 
+                    [operacionId, loteId, nroPasada, parseFloat(ancho.valor) || 0, parseInt(ancho.item)]);
+            }
         }
 
         await transaction.commit();
-        console.log('=== PASADA GUARDADA EXITOSA ===');
-        res.json({ success: true, message: 'Pasada guardada correctamente' });
+        console.log("=== EXITO: HORA ACTUALIZADA EN TODAS LAS TABLAS ===");
+        res.json({ success: true });
     } catch (err) {
         await transaction.rollback();
-        console.error('Error en saveInspeccionPasada:', err);
-        res.status(500).json({ error: err.message });
+        console.error("!!! ERROR SQL:", err.message);
+        res.status(500).json({ error: "Error de base de datos", details: err.message });
+    }
+};
+
+const saveInspeccionHeader = async (req, res) => {
+    const { operacionId, loteId } = req.params;
+    const { header } = req.body;
+
+    const transaction = await dbRegistracionNET.transaction();
+    try {
+        let fechaSql = new Date().toISOString();
+        if (header.fecha && header.fecha.includes('/')) {
+            const [d, m, y] = header.fecha.split('/');
+            fechaSql = `${y}-${m}-${d}`;
+        }
+
+        const paramsUpdate = [
+            operacionId,
+            loteId,
+            fechaSql,
+            header.serieLote || "",
+            header.ordenProduccion || "",
+            parseInt(header.rolloEntrante) || 1,
+            parseInt(header.cantPasadas) || 1,
+            header.observaciones || "",
+            String(header.cantFlejes || "0")
+        ];
+
+        console.log("Actualizando Header General:", paramsUpdate);
+        await transaction.raw(`EXEC dbo.SP_EditarInspeccionSlitterGral ?,?,?,?,?,?,?,?,?`, paramsUpdate);
+
+        await transaction.commit();
+        res.json({ success: true });
+    } catch (err) {
+        await transaction.rollback();
+        console.error("Error al guardar header:", err.message);
+        res.status(500).json({ error: "Error de base de datos" });
     }
 };
 
@@ -1794,185 +1625,6 @@ const obtenerAtadosSobrante = async (req, res) => {
         res.status(500).json({ error: 'Error interno del servidor al obtener los atados de sobrante.' });
     }
 };
-
-// const cerrarOperacion = async (req, res) => {
-//     console.log("PASANDO POR CERRAR OPERACION!!!!");
-    
-//     const { operacionId } = req.params;
-//     const { usuario } = req.body; // El usuario que cierra la operación
-
-//     if (!operacionId) {
-//         return res.status(400).json({ error: "ID de operación requerido." });
-//     }
-
-//     const transaction = await dbRegistracionNET.transaction();
-
-//     try {
-//         // 1. Obtener la operación principal
-//         const [operacionPrincipal] = await transaction.raw("SELECT * FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
-//         if (!operacionPrincipal) {
-//             throw new Error("Operación no encontrada.");
-//         }
-
-//         // 2. Verificar si ya está cerrada (Estado = '2')
-//         if (operacionPrincipal.Estado === '2') {
-//             throw new Error("La Operación ya fue CERRADA. No se puede volver a cerrar.");
-//         }
-
-//         // 3. Actualizar el estado de la operación a '2' (Cerrada)
-//         await transaction("OperacionesCalipso")
-//             .where({ Operacion_ID: operacionId })
-//             .update({ Estado: '2' });
-
-//         // 4. Actualizar el ancho en Calipso (si es necesario)
-//         // Este paso es opcional y depende de tu lógica de negocio.
-//         // En el código VB, se llama a SP_ActualizaAnchoProcesoCalipso.
-//         // Aquí asumimos que solo se hace si hay un Lote_IDS válido.
-//         if (operacionPrincipal.Lote_ID && operacionPrincipal.Lote_ID !== '00000000-0000-0000-0000-000000000000') {
-//             // Ejemplo: Actualizar el ancho en la tabla de lotes de Calipso
-//             // NOTA: Debes ajustar esto según tu estructura de base de datos.
-//             // const anchoFinal = parseFloat(operacionPrincipal.Operacion_TotalAncho) || 0;
-//             // await transaction.raw("EXEC SP_ActualizaAnchoProcesoCalipso @Lote_ID=?, @Ancho=?", [operacionPrincipal.Lote_ID, anchoFinal]);
-//         }
-
-//         // 5. Registrar el log de cierre
-//         // Construye el mensaje en JS, sin interpolación dentro de la query
-//         const mensajeLog = `Cierre de Operación - Slitter - Dest:${operacionPrincipal.Destino_Lote || 'N/A'}`;
-
-//         await transaction.raw(`
-//             EXEC SP_REGISTRO_LOG
-//             @Operacion_ID=?,
-//             @Maquina=?,
-//             @Formulario='frmDetalleSlitter',
-//             @Tipo=1,
-//             @Fecha=?,
-//             @Usuario=?,
-//             @Mensaje=?
-//         `, [
-//             operacionId,
-//             operacionPrincipal.Maquina || 'Desconocido',
-//             new Date().toISOString(),
-//             usuario || 'Desconocido',
-//             mensajeLog  // ← ahora es un parámetro seguro
-//         ]);
-
-//         // 6. Opcional: Actualizar el flag de batch en Calipso si ya no quedan operaciones pendientes
-//         // Esto también depende de tu lógica.
-//         // const [batchResult] = await transaction.raw("EXEC SP_TraerOperacionesPendientesBatch @Nro_Batch=?", [operacionPrincipal.NroBatch]);
-//         // if (batchResult && !batchResult.HasRows) {
-//         //     await transaction.raw("EXEC SP_REG_CambiarFlagFabricado @Nro_Batch=?", [operacionPrincipal.NroBatch]);
-//         // }
-
-//         await transaction.commit();
-
-//         res.status(200).json({
-//             success: true,
-//             message: "Operación cerrada exitosamente.",
-//             operacionId: operacionId
-//         });
-
-//     } catch (error) {
-//         await transaction.rollback();
-//         console.error(`Error al cerrar la operación ${operacionId}:`, error);
-//         res.status(500).json({
-//             error: "Error interno del servidor al cerrar la operación.",
-//             details: error.message
-//         });
-//     }
-// };
-
-
-// const cerrarOperacion = async (req, res) => {
-//     console.log("✅ PASANDO POR CERRAR OPERACION!!!!");
-//     console.log("✅ OperacionID recibido:", req.params.operacionId);
-//     console.log("✅ Usuario recibido:", req.body.usuario);
-//     console.log("✅ Body completo:", req.body);
-    
-//     const { operacionId } = req.params;
-//     const { usuario } = req.body;
-
-//     if (!operacionId) {
-//         console.log("❌ ERROR: ID de operación requerido.");
-//         return res.status(400).json({ error: "ID de operación requerido." });
-//     }
-
-//     const transaction = await dbRegistracionNET.transaction();
-    
-//     try {
-//         console.log("✅ 1. Iniciando transacción...");
-
-//         // 1. Obtener la operación principal
-//         console.log("✅ 2. Buscando operación en BD...");
-//         const [operacionPrincipal] = await transaction.raw("SELECT * FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
-//         console.log("✅ Resultado de búsqueda:", operacionPrincipal);
-        
-//         if (!operacionPrincipal) {
-//             console.log("❌ ERROR: Operación no encontrada.");
-//             throw new Error("Operación no encontrada.");
-//         }
-
-//         console.log("✅ 3. Estado actual de operación:", operacionPrincipal.Estado);
-
-//         // 2. Verificar si ya está cerrada (Estado = '2')
-//         if (operacionPrincipal.Estado === '2') {
-//             console.log("❌ ERROR: Operación ya cerrada.");
-//             throw new Error("La Operación ya fue CERRADA. No se puede volver a cerrar.");
-//         }
-
-//         // 3. Actualizar el estado de la operación a '2' (Cerrada)
-//         console.log("✅ 4. Actualizando estado a '2' (Cerrada)...");
-//         await transaction("OperacionesCalipso")
-//             .where({ Operacion_ID: operacionId })
-//             .update({ Estado: '2' });
-//         console.log("✅ Estado actualizado correctamente.");
-
-//         // 5. Registrar el log de cierre
-//         console.log("✅ 5. Registrando log de cierre...");
-//         const mensajeLog = `Cierre de Operación - Slitter - Dest:${operacionPrincipal.Destino_Lote || 'N/A'}`;
-//         console.log("✅ Mensaje de log:", mensajeLog);
-
-//         await transaction.raw(`
-//             EXEC SP_REGISTRO_LOG
-//             @Operacion_ID=?,
-//             @Maquina=?,
-//             @Formulario='frmDetalleSlitter',
-//             @Tipo=1,
-//             @Fecha=?,
-//             @Usuario=?,
-//             @Mensaje=?
-//         `, [
-//             operacionId,
-//             operacionPrincipal.Maquina || 'Desconocido',
-//             new Date().toISOString(),
-//             usuario || 'Desconocido',
-//             mensajeLog
-//         ]);
-//         console.log("✅ Log registrado correctamente.");
-
-//         await transaction.commit();
-//         console.log("✅ 6. Transacción confirmada.");
-
-//         res.status(200).json({
-//             success: true,
-//             message: "Operación cerrada exitosamente.",
-//             operacionId: operacionId
-//         });
-
-//     } catch (error) {
-//         console.error(`❌ ERROR EN CERRAR OPERACIÓN ${operacionId}:`, error);
-//         console.error("❌ Stack trace:", error.stack);
-        
-//         await transaction.rollback();
-//         console.error("❌ Transacción revertida.");
-        
-//         res.status(500).json({
-//             error: "Error interno del servidor al cerrar la operación.",
-//             details: error.message,
-//             stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-//         });
-//     }
-// };
-
 
 const cerrarOperacion = async (req, res) => {
     // Capturamos el ID y el usuario
@@ -2163,7 +1815,6 @@ const getOperacionesPlancha = async (req, res) => {
   }
 };
 
-
 module.exports = {
     getMaquinas,
     getOperaciones,
@@ -2188,6 +1839,7 @@ module.exports = {
     updateInspeccionCalidad,
     forceFinalInspeccion,
     saveInspeccionPasada,
+    saveInspeccionHeader,
     getLabelData,
     getCodigoProductoMerma,
     obtenerAtadosSobrante,
