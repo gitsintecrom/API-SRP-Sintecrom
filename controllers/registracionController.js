@@ -1515,20 +1515,30 @@ const saveInspeccionPasada = async (req, res) => {
 
 const saveInspeccionHeader = async (req, res) => {
     const { operacionId, loteId } = req.params;
-    const { header } = req.body;
+    const { header, usuario = 'admin' } = req.body;
 
     const transaction = await dbRegistracionNET.transaction();
     try {
-        let fechaSql = new Date().toISOString();
+        // 1. GENERAR HORA ARGENTINA MANUAL (GMT-3)
+        // Restamos 3 horas exactas al objeto Date antes de enviarlo
+        const ahora = new Date();
+        const argTime = new Date(ahora.getTime() - (3 * 60 * 60 * 1000)); 
+        const fechaLocalArg = argTime.toISOString().slice(0, 19).replace('T', ' '); 
+
+        console.log("Actualizando Header General - Hora Argentina:", fechaLocalArg);
+
+        // 2. Limpieza de fecha de PRODUCCIÓN para el campo [Fecha]
+        let fechaProduccionSql = fechaLocalArg.split(' ')[0]; 
         if (header.fecha && header.fecha.includes('/')) {
             const [d, m, y] = header.fecha.split('/');
-            fechaSql = `${y}-${m}-${d}`;
+            fechaProduccionSql = `${y}-${m}-${d}`;
         }
 
+        // 3. Ejecutar el Procedimiento Almacenado de Edición (9 parámetros)
         const paramsUpdate = [
             operacionId,
             loteId,
-            fechaSql,
+            fechaProduccionSql,
             header.serieLote || "",
             header.ordenProduccion || "",
             parseInt(header.rolloEntrante) || 1,
@@ -1537,15 +1547,24 @@ const saveInspeccionHeader = async (req, res) => {
             String(header.cantFlejes || "0")
         ];
 
-        console.log("Actualizando Header General:", paramsUpdate);
         await transaction.raw(`EXEC dbo.SP_EditarInspeccionSlitterGral ?,?,?,?,?,?,?,?,?`, paramsUpdate);
 
+        // 4. FORZAR LA ACTUALIZACIÓN DE HORA (FecReg) Y USUARIO
+        // Esto garantiza que el cambio se vea reflejado en la base de datos inmediatamente
+        await transaction.raw(
+            `UPDATE InspeccionSlitter 
+             SET FecReg = ?, Usuario = ? 
+             WHERE Operacion_ID = ? AND Lote_ID = ?`,
+            [fechaLocalArg, usuario, operacionId, loteId]
+        );
+
         await transaction.commit();
+        console.log("=== EXITO: HEADER Y HORA ACTUALIZADOS ===");
         res.json({ success: true });
     } catch (err) {
         await transaction.rollback();
-        console.error("Error al guardar header:", err.message);
-        res.status(500).json({ error: "Error de base de datos" });
+        console.error("Error al guardar header general:", err.message);
+        res.status(500).json({ error: "Error de base de datos", details: err.message });
     }
 };
 
