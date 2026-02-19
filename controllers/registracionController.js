@@ -1773,34 +1773,115 @@ const getOperacionesSlitter = async (req, res) => {
 
 const getOperacionesEmbalaje = async (req, res) => {
     const { maquinaId } = req.params;
+    if (!maquinaId) return res.status(400).json({ error: "El ID de la máquina es requerido." });
+
     try {
-        const operaciones = await dbRegistracionNET.raw(`
-            SELECT 
-                Operacion_ID,
-                Nro_Pedido,
-                Nro_Item,
-                Serie_Lote,
-                Nro_MultiOp,
-                Programados,
-                Stock,
-                Balance,
-                Abastecida,
-                OpAnt,
-                Clientes,
-                Cali,
-                Ancho,
-                Familia,
-                Espesor,
-                Fecha_Inicio,
-                Preembalaje
-            FROM OperacionesCalipso
-            WHERE Maquina = ? AND Estado = '1'
-            ORDER BY Fecha_Inicio DESC
-        `, [maquinaId]);
-        res.status(200).json(operaciones);
+        // Usar SP específico para embalaje
+        const spName = 'SP_TraerOperacionesPorMaquinaEmbalaje';
+        const baseOperaciones = await dbRegistracionNET.raw(`EXEC ${spName} @Maquina=?`, [maquinaId]);
+        
+        if (!baseOperaciones || baseOperaciones.length === 0) {
+            return res.status(200).json([]);
+        }
+
+        // DEVOLVER DATOS SIN RECALCULAR ESTADOS COMPLEJOS
+        const enrichedOperaciones = await Promise.all(baseOperaciones.map(async (op) => {
+            // Obtener datos adicionales en paralelo
+            const [opAnteriorResult, calidadResult, multiOpResult] = await Promise.all([
+                dbRegistracionNET.raw("EXEC SP_TraerOperacionesAnteriores @Origen_Lote_ID=?", [op.Origen_Lote_ID]),
+                dbRegistracionNET.raw("EXEC SP_TraerCalidadOperacion @Operacion_ID=?", [op.Operacion_ID]),
+                dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacion @Operacion_ID=?", [op.Operacion_ID])
+            ]);
+
+            // Datos de operación anterior
+            const opAnterior = opAnteriorResult[0] || {};
+            const estadoAnterior = opAnterior.Estado || '0'; // '0' = abierta, '2' = cerrada
+            const suspendidaAnterior = opAnterior.Suspendida || 0;
+            const opAnteriorStatusText = estadoAnterior === '2' ? 'OK' : (opAnteriorResult.length === 0 ? 'OK-R' : 'PENDIENTE');
+            
+            // Datos de calidad
+            const calidad = calidadResult[0] || {};
+            const dictamenCalidad = calidad.Dictamen !== undefined ? calidad.Dictamen : null; // null = sin calidad, 0 = en calidad, 1/2 = dictaminada
+            
+            // Datos de multioperación
+            const numeroMultiOperacion = multiOpResult.length > 0 ? multiOpResult[0].NumeroMultiOperacion : null;
+            
+            // Campos calculados para el frontend (sin lógica de estado compleja)
+            const familia = op.Codigo_Producto ? op.Codigo_Producto.substring(8, 10) : '';
+            const espesor = op.Codigo_Producto ? (parseFloat(op.Codigo_Producto.substring(14, 18)) / 1000).toFixed(3) : '';
+            
+            // DEVOLVER TODOS LOS CAMPOS SIN RECALCULAR EL ESTADO
+            return {
+                // Campos básicos del SP
+                Operacion_ID: op.Operacion_ID,
+                NumeroDocumento: op.NumeroDocumento || '',
+                Origen_Lote: op.Origen_Lote || '',
+                Origen_Lote_ID: op.Origen_Lote_ID || '',
+                NumeroMultiOperacion: numeroMultiOperacion,
+                KilosProgramadosEntrantes: op.KilosProgramadosEntrantes || 0,
+                Stock: op.Stock || 0,
+                NroBatch: op.NroBatch || '',
+                Kilos_Balanza: op.Kilos_Balanza || 0,
+                Abastecida: op.Abastecida || '1', // '0' = abastecida, '1' = no abastecida
+                Estado: op.Estado || '0', // '0' = cerrada, '1' = abierta
+                Suspendida: op.Suspendida || 0, // 0 = no suspendida, 1 = suspendida
+                Preembalaje: op.Preembalaje || '0', // '1' = es preembalaje
+                
+                // Campos específicos de Embalaje
+                NumeroPedido: op.NumeroPedido || '',
+                NumeroItem: op.NumeroItem || '',
+                Clientes: op.Clientes || '',
+                Tarea: op.Tarea || '',
+                CantidadPaquetes: op.CantidadPaquetes || 1,
+                CantidadRollos: op.CantidadRollos || 1,
+                CodProdPedido: op.CodProdPedido || '',
+                
+                // Campos de fecha
+                Operacion_Fecha_Temprana: op.Operacion_Fecha_Temprana || '',
+                batch_FechaInicio: op.batch_FechaInicio || '',
+                batch_FechaFin: op.batch_FechaFin || '',
+                
+                // Campos de producto
+                Codigo_Producto: op.Codigo_Producto || '',
+                Ancho: op.Operacion_TotalAncho || 0,
+                Operacion_Cuchillas: op.Operacion_Cuchillas || '',
+                Nro_Matching: op.Nro_Matching || '',
+                CoronaE: op.CoronaE || 0,
+                Diametro: op.Diametro || 0,
+                
+                // Campos calculados para el frontend
+                Familia: familia,
+                Espesor: espesor,
+                
+                // Campos para lógica de colores (frontend los usará)
+                OpAnteriorStatus: opAnteriorStatusText, // 'OK', 'OK-R', o 'PENDIENTE'
+                EstadoAnterior: estadoAnterior, // '0' = abierta, '2' = cerrada
+                SuspendidaAnterior: suspendidaAnterior, // 0 o 1
+                DictamenCalidad: dictamenCalidad, // null, 0, 1, o 2
+                TieneCalidad: calidadResult.length > 0,
+                TieneMultiOperacion: numeroMultiOperacion !== null
+            };
+        }));
+
+        // Ordenar por fecha de inicio
+        enrichedOperaciones.sort((a, b) => {
+            const dateA = a.batch_FechaInicio 
+                ? new Date(a.batch_FechaInicio.replace(/(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})/, '$1-$2-$3T$4:$5:00')) 
+                : new Date(0);
+            const dateB = b.batch_FechaInicio 
+                ? new Date(b.batch_FechaInicio.replace(/(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})/, '$1-$2-$3T$4:$5:00')) 
+                : new Date(0);
+            return dateA - dateB;
+        });
+
+        res.status(200).json(enrichedOperaciones);
     } catch (error) {
-        console.error(`Error al obtener operaciones de Embalaje ${maquinaId}:`, error);
-        res.status(500).json({ error: "Error interno del servidor." });
+        console.error(`Error en getOperacionesEmbalaje:`, error);
+        res.status(500).json({ 
+            error: "Error interno del servidor", 
+            details: error.message,
+            stack: error.stack 
+        });
     }
 };
 
