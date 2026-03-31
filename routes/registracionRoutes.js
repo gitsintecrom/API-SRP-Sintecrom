@@ -7,6 +7,7 @@ const {
     getOperaciones,
     procesarOperaciones,
     getDetalleOperacion,
+    getDetalleOperacionEmbalaje,
     getInspeccionData,
     getCalculo_cuchillas,
     getFichaTecnicaProductos,
@@ -45,6 +46,7 @@ router.get('/operaciones/plancha/:maquinaId', getOperacionesPlancha);
 
 router.post("/operaciones/procesar", procesarOperaciones);
 router.get("/detalle/:operacionId", getDetalleOperacion);
+router.get("/detalle-embalaje/:operacionId", getDetalleOperacionEmbalaje);
 router.get("/inspeccion/:operacionId/:loteId", getInspeccionData);
 router.get("/fichatecnica/:operacionId", getFichaTecnicaProductos);
 router.get("/fichatecnica/detalle/:codProd", getFichaTecnicaDetalle);
@@ -54,6 +56,7 @@ router.get("/notas-calipso/:operacionId", getNotasCalipso);
 router.put("/editar/:operacionId", updateOperacion);
 
 // Nuevas rutas para pesaje
+router.get('/pesaje/codigo-merma/:operacionId', getCodigoProductoMerma); // Usamos el nombre definido
 router.post("/pesaje/obtener-atados", obtenerAtadosRegistrados);
 router.post('/pesaje/obtener-registro-scrap-no-seriado', obtenerRegistroScrapNoSeriado);
 router.post("/pesaje/obtener-y-actualizar-etiqueta", obtenerYActualizarEtiqueta);
@@ -88,6 +91,6 @@ router.post('/inspeccion/save-header/:operacionId/:loteId', saveInspeccionHeader
 
 router.get("/pesaje/imprimir-etiqueta/:operacionId/:atadoId/:nroEtiqueta", getLabelData);
 
-router.get("/pesaje/codigo-merma/:operacionId", getCodigoProductoMerma);
+// router.get("/pesaje/codigo-merma/:operacionId", getCodigoProductoMerma);
 
 module.exports = router;
