@@ -38,8 +38,21 @@
               "icon": "lucide-git-fork",
               "title": "Vista gráfica"
             }
+          },
+          {
+            "id": "40fb23ce5e96d3b1",
+            "type": "leaf",
+            "state": {
+              "type": "image",
+              "state": {
+                "file": "Pasted image 20250723100804.png"
+              },
+              "icon": "lucide-image",
+              "title": "Pasted image 20250723100804"
+            }
           }
-        ]
+        ],
+        "currentTab": 1
       }
     ],
     "direction": "vertical"
@@ -96,7 +109,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 205.5
+    "width": 389.5
   },
   "right": {
     "id": "1302a47b02cbde4c",
@@ -175,6 +188,7 @@
   },
   "left-ribbon": {
     "hiddenItems": {
+      "bases:Crear nueva base": false,
       "switcher:Abrir selector rápido": false,
       "graph:Abrir vista gráfica": false,
       "canvas:Crear nuevo lienzo": false,
@@ -183,11 +197,11 @@
       "command-palette:Abrir paleta de comandos": false
     }
   },
-  "active": "11525eae1f2929ea",
+  "active": "2233018d200cc571",
   "lastOpenFiles": [
+    "Pasted image 20250723100804.png",
     "Documentación del Sistema S.R.P..md",
     "Pasted image 20250723100753.png",
-    "Pasted image 20250723100804.png",
     "Sin título.md",
     "Sin título 2.md",
     "Sin título 1.md",
