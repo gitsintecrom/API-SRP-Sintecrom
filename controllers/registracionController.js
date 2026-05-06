@@ -262,8 +262,8 @@ const getDetalleOperacion = async (req, res) => {
         let lineasMap = new Map();
         let totalMerma = 0;
         let totalSobranteSO = 0, totalSobranteCal = 0, atadosSobrante = 0, rollosSobrante = 0;
-        let totalScrapSeriado = 0, atadosScrapSeriado = 0;
-        let totalScrapNoSeriado = 0, atadosScrapNoSeriado = 0;
+        let totalScrapSeriado = 0, atadosScrapSeriado = 0, rollosScrapSeriado = 0;
+        let totalScrapNoSeriado = 0, atadosScrapNoSeriado = 0, rollosScrapNoSeriado = 0;
 
         for (const op of operacionesInvolucradas) {
             const cortes = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesARegistrar @Operacion_ID=?", [op.Operacion_ID]);
@@ -295,26 +295,32 @@ const getDetalleOperacion = async (req, res) => {
                 lineasMap.get(key).Programados += parseFloat(corte.KilosProgramadosS || 0);
             }
 
+            // === PROCESAR SOBRANTES (Sobrante = 1) ===
             const rawSob = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradasSobrante @Operacion_ID=?, @Sobrante=?", [op.Operacion_ID, 1]);
             (Array.isArray(rawSob) ? rawSob : [rawSob]).forEach(s => {
                 if(s) {
                     totalSobranteSO += parseFloat(s.Kilos_Sobreorden || 0);
                     totalSobranteCal += parseFloat(s.Kilos_Calidad || 0);
                     atadosSobrante += parseInt(s.Atados || 0);
-                    rollosSobrante += parseInt(s.Rollos || 0);
+                    rollosSobrante += parseInt(s.Rollos || 0); // ✅ AGREGADO: acumular rollos de sobrante
                 }
             });
 
+            // === PROCESAR SCRAP (Sobrante = 2) ===
             const rawScr = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradasSobrante @Operacion_ID=?, @Sobrante=?", [op.Operacion_ID, 2]);
             (Array.isArray(rawScr) ? rawScr : [rawScr]).forEach(s => {
                 if(s) {
                     const kilos = parseFloat(s.Kilos_Sobreorden || 0) + parseFloat(s.Kilos_Calidad || 0);
                     if (s.Lote_IDS?.toUpperCase() === SCRAP_NO_SERIADO_GUID) {
+                        // SCRAP NO SERIADO
                         totalScrapNoSeriado += kilos;
                         atadosScrapNoSeriado += parseInt(s.Atados || 0);
+                        rollosScrapNoSeriado += parseInt(s.Rollos || 0); // ✅ AGREGADO: acumular rollos de scrap no seriado
                     } else {
+                        // SCRAP SERIADO
                         totalScrapSeriado += kilos;
                         atadosScrapSeriado += parseInt(s.Atados || 0);
+                        rollosScrapSeriado += parseInt(s.Rollos || 0); // ✅ AGREGADO: acumular rollos de scrap seriado
                     }
                 }
             });
@@ -328,8 +334,9 @@ const getDetalleOperacion = async (req, res) => {
         const kgsEntrantes = parseFloat(rawTrans[0]?.Kilos_Balanza || 0);
 
         // Sumatorias finales para el Header
-        const totalAtadosReg = lineasArr.reduce((sum, l) => sum + (l.TotAtados || 0), 0) + atadosSobrante + atadosScrapSeriado;
-        const totalRollosReg = lineasArr.reduce((sum, l) => sum + (l.TotRollos || 0), 0) + rollosSobrante;
+        // ✅ CORRECCIÓN: Sumar TODOS los atados y rollos incluyendo scrap
+        const totalAtadosReg = lineasArr.reduce((sum, l) => sum + (l.TotAtados || 0), 0) + atadosSobrante + atadosScrapSeriado + atadosScrapNoSeriado;
+        const totalRollosReg = lineasArr.reduce((sum, l) => sum + (l.TotRollos || 0), 0) + rollosSobrante + rollosScrapSeriado + rollosScrapNoSeriado;
 
         res.status(200).json({
             header: {
@@ -360,16 +367,21 @@ const getDetalleOperacion = async (req, res) => {
                 sobreOrden: lineasArr.reduce((s, l) => s + l.SobreOrden, 0),
                 calidad: lineasArr.reduce((s, l) => s + l.Calidad, 0),
                 sobrante: totalSobranteSO + totalSobranteCal, atadosSobrante, rollosSobrante,
-                scrap: totalScrapSeriado + totalScrapNoSeriado, scrapSeriado: totalScrapSeriado, atadosScrapSeriado,
-                scrapNoSeriado: totalScrapNoSeriado, atadosScrapNoSeriado,
+                scrap: totalScrapSeriado + totalScrapNoSeriado, 
+                scrapSeriado: totalScrapSeriado, 
+                atadosScrapSeriado, 
+                rollosScrapSeriado,  // ✅ AGREGADO: enviar rollos de scrap seriado al frontend
+                scrapNoSeriado: totalScrapNoSeriado, 
+                atadosScrapNoSeriado, 
+                rollosScrapNoSeriado,  // ✅ AGREGADO: enviar rollos de scrap no seriado al frontend
                 saldo: kgsEntrantes - (lineasArr.reduce((s, l) => s + l.SobreOrden + l.Calidad, 0) + (totalSobranteSO + totalSobranteCal) + (totalScrapSeriado + totalScrapNoSeriado))
             }
         });
     } catch (error) {
+        console.error("ERROR BACKEND getDetalleOperacion:", error);
         res.status(500).json({ error: error.message });
     }
 };
-
 
 // ============================================================================
 // getDetalleOperacionEmbalaje - VERSIÓN CORREGIDA (RESPETANDO STORED PROCEDURES)
