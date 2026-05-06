@@ -336,7 +336,7 @@ const getDetalleOperacion = async (req, res) => {
             const espesorBase = parseFloat(f.Espesor);
             const espesorMax = (espesorBase + parseFloat(f.ESPESORMAX)).toFixed(3);
             const espesorMin = (espesorBase + parseFloat(f.ESPESORMIN)).toFixed(3);
-            espesorConTolerancias = `${f.Espesor}   Máx:${espesorMax} Mín:${espesorMin}`;
+            espesorConTolerancias = `${f.Espesor} Máx:${espesorMax} Mín:${espesorMin}`;
         }
 
         const rawTrans = await dbRegistracionNET.raw("SELECT Kilos_Balanza FROM Transacciones WHERE Operacion_ID = ?", [operacionId]);
