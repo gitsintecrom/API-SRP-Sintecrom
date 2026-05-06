@@ -928,11 +928,14 @@ const registrarPesaje = async (req, res) => {
         }
 
         if (sobrante === 1) { 
+            // ✅ SOBRANTE: El ID y código son los mismos que el entrante
             loteIDSFinal = opInfo.Origen_Lote_ID;
             if (!codigoProductoSFinal) {
                 codigoProductoSFinal = opInfo.Codigo_Producto;
             }
+            console.log("✅ SOBRANTE - codigoProductoSFinal:", codigoProductoSFinal);
         } else if (sobrante === 2) { 
+            // SCRAP
             if (lineaData?.bScrapNoSeriado) {
                 loteIDSFinal = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
                 destinoLoteFinal = 'Scrap No Seriado';
@@ -944,17 +947,19 @@ const registrarPesaje = async (req, res) => {
                 await transaction.raw("EXEC SP_EditarLotesDisponiblesScrap @Lote_IDS=?, @Usado=1", [loteIDSFinal]);
             }
         } else {
+            // CORTE NORMAL
             if (!codigoProductoSFinal && loteIDSFinal) {
                 const [corteInfo] = await transaction.raw(
                     "SELECT TOP 1 Codigo_ProductoS FROM OperacionesCalipso WHERE Lote_IDS = ?", [loteIDSFinal]
                 );
-                if (corteInfo) codigoProductoSFinal = corteInfo.Codigo_ProductoS;
-                console.log("PASA POR CODIGO_PRODUCTOS......");
-                console.log("codigoProductoSinal........:", codigoProductoSFinal);
+                if (corteInfo) {
+                    codigoProductoSFinal = corteInfo.Codigo_ProductoS;
+                    console.log("✅ CORTE NORMAL - codigoProductoSFinal:", codigoProductoSFinal);
+                }
             }
         }
 
-        // 🟢 3. VERIFICACIÓN DE EXISTENCIA CORREGIDA (Clave única: Operacion_ID + Lote_IDS + Sobrante)
+        // 🟢 3. VERIFICACIÓN DE EXISTENCIA
         const checkExistencia = await transaction.raw(
             "SELECT ID FROM Registracion WHERE Operacion_ID = ? AND Lote_IDS = ? AND Sobrante = ?",
             [operacionId, loteIDSFinal || '00000000-0000-0000-0000-000000000000', sobrante]
@@ -963,7 +968,7 @@ const registrarPesaje = async (req, res) => {
         const registroExistente = checkExistencia.length > 0 ? checkExistencia[0] : null;
         const existeRegistro = !!registroExistente;
 
-        // 4. LIMPIEZA DE ATADOS PREVIOS (Solo si existe el registro)
+        // 4. LIMPIEZA DE ATADOS PREVIOS
         if (existeRegistro) {
             await transaction.raw(
                 "EXEC SP_EliminarAtadosRegistrados @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?",
@@ -997,7 +1002,7 @@ const registrarPesaje = async (req, res) => {
 
         // 7. REGISTRACION FINAL
         if (existeRegistro) {
-            // ✅ ACTUALIZAR registro existente (manteniendo Codigo_ProductoS)
+            // ✅ ACTUALIZAR registro existente
             await transaction.raw(
                 `UPDATE Registracion 
                  SET Kilos_Sobreorden = ?, Kilos_Calidad = ?, Atados = ?, Rollos = ?,
@@ -1018,15 +1023,8 @@ const registrarPesaje = async (req, res) => {
                 ]
             );
         } else {
-            // ✅ INSERTAR nuevo registro con SP original
+            // ✅ INSERTAR nuevo registro
             const flagAnulada = (tareaAGuardar === 'Scrap No Seriado') ? 'Z' : 'N';
-            var codigoProductoSFinal2 = '';
-
-            var [corteInfo2] = await transaction.raw(
-                    "SELECT TOP 1 Codigo_ProductoS FROM OperacionesCalipso WHERE Lote_IDS = ?", [loteIDSFinal]
-            );
-            codigoProductoSFinal2 = corteInfo2.Codigo_ProductoS;
-            console.log("codigoProductoSinal........:", codigoProductoSFinal);
             
             const paramsInsert = [
                 operacionId,
@@ -1035,7 +1033,7 @@ const registrarPesaje = async (req, res) => {
                 opInfo.NroBatch || '',
                 opInfo.Operacion_C_Desc || opInfo.Operacion_Cuchillas || '',
                 opInfo.Codigo_Producto || '',
-                codigoProductoSFinal || '',
+                codigoProductoSFinal || '',  // ✅ YA TIENE VALOR ASIGNADO
                 opInfo.Origen_Lote_ID || null,
                 lineaData.Programados || 0,
                 sobreOrdenTotal,
@@ -1054,6 +1052,7 @@ const registrarPesaje = async (req, res) => {
                 flagAnulada 
             ];
 
+            console.log("📋 paramsInsert - Posición 7 (Codigo_ProductoS):", paramsInsert[6]);
             await transaction.raw("EXEC SP_InsertarRegistracion ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?", paramsInsert);
         }
 
@@ -1061,7 +1060,7 @@ const registrarPesaje = async (req, res) => {
         res.status(200).json({ success: true, message: existeRegistro ? 'Registro actualizado correctamente' : 'Registro creado correctamente' });
     } catch (error) {
         if (transaction) await transaction.rollback();
-        console.error("Error en registrarPesaje:", error);
+        console.error("❌ Error en registrarPesaje:", error);
         res.status(500).json({ error: error.message });
     }
 };
