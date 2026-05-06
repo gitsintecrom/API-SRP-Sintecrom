@@ -529,7 +529,6 @@ const getDetalleOperacionEmbalaje = async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 };
 
-
 const getCalculo_cuchillas = async (req, res) => {
     const { cuchillas, espesor, ancho } = req.body;
     if (!cuchillas || espesor === undefined || ancho === undefined) {
@@ -936,6 +935,9 @@ const registrarPesaje = async (req, res) => {
             [operacionId]
         );
 
+        console.log("opInfo.......................:", opInfo);
+        
+
         if (!opInfo) throw new Error("No se encontró información de la operación principal.");
 
         // 2. DETERMINAR IDs Y DESTINOS
@@ -943,22 +945,9 @@ const registrarPesaje = async (req, res) => {
         let destinoLoteFinal = lineaData?.Destino || lineaData?.SerieLote || opInfo.Origen_Lote || '';
         let codigoProductoSFinal = lineaData.CodigoProductoS || '';
 
-        // --- 🟢 LÓGICA CORREGIDA PARA LA TAREA ---
+        // --- 🟢 LÓGICA CORREGIDA PARA LA TAREA (IGUAL QUE VB.NET) ---
         let tareaAGuardar = '';
-        
-        if (sobrante === 1) {
-            tareaAGuardar = 'Sobrante';
-        } else if (sobrante === 2 && lineaData?.bScrapNoSeriado) {
-            tareaAGuardar = 'Scrap No Seriado';
-        } else {
-            const idMaquina = lineaData.Maquina || opInfo.Maquina || '';
-            
-            if (idMaquina.startsWith('SL')) {
-                tareaAGuardar = `${idMaquina} CORTE`;
-            } else {
-                tareaAGuardar = lineaData.Tarea || opInfo.Tarea || 'CORTE';
-            }
-        }
+        tareaAGuardar = opInfo.Tarea;
 
         if (sobrante === 1) { 
             // ✅ SOBRANTE: El ID y código son los mismos que el entrante
@@ -1061,12 +1050,12 @@ const registrarPesaje = async (req, res) => {
             
             const paramsInsert = [
                 operacionId,
-                tareaAGuardar,
+                tareaAGuardar,  // ✅ AHORA USA EL VALOR CORRECTO DE LA BD
                 opInfo.Maquina || '',
                 opInfo.NroBatch || '',
                 opInfo.Operacion_C_Desc || opInfo.Operacion_Cuchillas || '',
                 opInfo.Codigo_Producto || '',
-                codigoProductoSFinal || '',  // ✅ YA TIENE VALOR ASIGNADO
+                codigoProductoSFinal || '',
                 opInfo.Origen_Lote_ID || null,
                 lineaData.Programados || 0,
                 sobreOrdenTotal,
@@ -1085,7 +1074,7 @@ const registrarPesaje = async (req, res) => {
                 flagAnulada 
             ];
 
-            console.log("📋 paramsInsert - Posición 7 (Codigo_ProductoS):", paramsInsert[6]);
+            console.log("📋 paramsInsert - Tarea a guardar:", tareaAGuardar);
             await transaction.raw("EXEC SP_InsertarRegistracion ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?", paramsInsert);
         }
 
