@@ -330,6 +330,15 @@ const getDetalleOperacion = async (req, res) => {
         const fichaResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [operacionPrincipal.Codigo_Producto]);
         const f = fichaResult[0] || {};
 
+        // Calcular espesor con tolerancias (IGUAL QUE VB.NET)
+        let espesorConTolerancias = f.Espesor || 'N/A';
+        if (f.Espesor && f.ESPESORMAX !== undefined && f.ESPESORMIN !== undefined) {
+            const espesorBase = parseFloat(f.Espesor);
+            const espesorMax = (espesorBase + parseFloat(f.ESPESORMAX)).toFixed(3);
+            const espesorMin = (espesorBase + parseFloat(f.ESPESORMIN)).toFixed(3);
+            espesorConTolerancias = `${f.Espesor}   Máx:${espesorMax} Mín:${espesorMin}`;
+        }
+
         const rawTrans = await dbRegistracionNET.raw("SELECT Kilos_Balanza FROM Transacciones WHERE Operacion_ID = ?", [operacionId]);
         const kgsEntrantes = parseFloat(rawTrans[0]?.Kilos_Balanza || 0);
 
@@ -342,23 +351,33 @@ const getDetalleOperacion = async (req, res) => {
             header: {
                 Clientes: operacionPrincipal.Clientes,
                 SerieLote: operacionPrincipal.Origen_Lote ? operacionPrincipal.Origen_Lote.replace(" - Ingreso", "").trim() : 'N/A',
-                Matching: operacionPrincipal.Nro_Matching, Batch: operacionPrincipal.NroBatch, ScrapProgramado: totalMerma,
-                Cuchillas: operacionPrincipal.Operacion_Cuchillas, Pasadas: pasadasOrigen, Diametro: operacionPrincipal.Diametro || '420',
-                Corona: operacionPrincipal.CoronaE || '0', Stock: operacionPrincipal.Stock, maquinaId,
-                // MAPEO DE FICHA TÉCNICA (Arreglando País y Calidad)
+                Matching: operacionPrincipal.Nro_Matching, 
+                Batch: operacionPrincipal.NroBatch, 
+                ScrapProgramado: totalMerma,
+                Cuchillas: operacionPrincipal.Operacion_Cuchillas, 
+                Pasadas: pasadasOrigen, 
+                Diametro: operacionPrincipal.Diametro || '420',
+                Corona: operacionPrincipal.CoronaE || '0', 
+                Stock: operacionPrincipal.Stock, 
+                maquinaId,
+                // MAPEO DE FICHA TÉCNICA
                 Familia: f.Familia || 'N/A',
                 Aleacion: f.Aleacion || 'N/A',
                 Temple: f.Temple || 'N/A',
-                Espesor: f.Espesor || 'N/A',
-                PaisOrigen: f.ORIGEN || 'N/A', // <-- ESTO ARREGLA EL PAÍS
+                Espesor: espesorConTolerancias,  // ✅ ESPESOR CON TOLERANCIAS (Máx y Mín)
+                PaisOrigen: f.ORIGEN || 'N/A',
                 Recubrimiento: f.Recubrimiento || 'N/A',
-                Calidad: f.CALIDADORI || 'N/A', // <-- ESTO ARREGLA LA CALIDAD
+                Calidad: f.CALIDADORI || 'N/A',
                 Ancho: operacionPrincipal.Ancho || operacionPrincipal.TotalAncho || operacionPrincipal.Operacion_TotalAncho || 'N/A', 
+                CodigoProducto: operacionPrincipal.Codigo_Producto || '',  // ✅ AGREGAR CÓDIGO DE PRODUCTO
                 KgsProgramados: lineasArr.reduce((s, l) => s + l.Programados, 0),
                 CantAtados: totalAtadosReg,
                 CantRollos: totalRollosReg,
-                LoteID: loteId, inicioRevisado: inspeccionGral?.IniciaCorte === 1, finalRevisado: inspeccionGral?.FinalizaOperacion === 1,
-                tieneNotasCalipso, tieneNotasSRP
+                LoteID: loteId, 
+                inicioRevisado: inspeccionGral?.IniciaCorte === 1, 
+                finalRevisado: inspeccionGral?.FinalizaOperacion === 1,
+                tieneNotasCalipso, 
+                tieneNotasSRP
             },
             lineas: lineasArr,
             balance: {
@@ -366,14 +385,16 @@ const getDetalleOperacion = async (req, res) => {
                 programados: lineasArr.reduce((s, l) => s + l.Programados, 0),
                 sobreOrden: lineasArr.reduce((s, l) => s + l.SobreOrden, 0),
                 calidad: lineasArr.reduce((s, l) => s + l.Calidad, 0),
-                sobrante: totalSobranteSO + totalSobranteCal, atadosSobrante, rollosSobrante,
+                sobrante: totalSobranteSO + totalSobranteCal, 
+                atadosSobrante, 
+                rollosSobrante,
                 scrap: totalScrapSeriado + totalScrapNoSeriado, 
                 scrapSeriado: totalScrapSeriado, 
                 atadosScrapSeriado, 
-                rollosScrapSeriado,  // ✅ AGREGADO: enviar rollos de scrap seriado al frontend
+                rollosScrapSeriado,  // ✅ ENVIAR ROLLOS DE SCRAP SERIADO
                 scrapNoSeriado: totalScrapNoSeriado, 
                 atadosScrapNoSeriado, 
-                rollosScrapNoSeriado,  // ✅ AGREGADO: enviar rollos de scrap no seriado al frontend
+                rollosScrapNoSeriado,  // ✅ ENVIAR ROLLOS DE SCRAP NO SERIADO
                 saldo: kgsEntrantes - (lineasArr.reduce((s, l) => s + l.SobreOrden + l.Calidad, 0) + (totalSobranteSO + totalSobranteCal) + (totalScrapSeriado + totalScrapNoSeriado))
             }
         });
