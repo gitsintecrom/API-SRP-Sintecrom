@@ -1,5 +1,11 @@
 // /controllers/registracionController.js -- VERSIÓN FINAL COMPLETA Y CORREGIDA
 
+process.stdout.on('error', (err) => {
+    if (err.code === 'EPIPE') {
+        process.exit(0);
+    }
+});
+
 const { dbRegistracionNET, dbSintecromDesa } = require("../config/database");
 const maquinasData = require('../data/maquinas.json');
 const bcrypt = require("bcrypt"); 
@@ -404,7 +410,259 @@ const getOperaciones = async (req, res) => {
 //     }
 // };
 
+// const getDetalleOperacion = async (req, res) => {
+//     const { operacionId } = req.params;
+//     const SCRAP_NO_SERIADO_GUID = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
+
+//     try {
+//         // 1. Obtener máquina y operación principal
+//         const rawMaquina = await dbRegistracionNET.raw("SELECT Maquina FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
+//         const opMaquinaInfo = Array.isArray(rawMaquina) ? rawMaquina[0] : rawMaquina;
+//         if (!opMaquinaInfo) return res.status(404).json({ error: "Operación no encontrada" });
+        
+//         const maquinaId = opMaquinaInfo.Maquina;
+//         const spName = (maquinaId === 'EMB') ? 'SP_TraerOperacionesPorMaquinaEmbalaje' : 'SP_TraerOperacionesPorMaquina';
+        
+//         const todasLasOperaciones = await dbRegistracionNET.raw(`EXEC ${spName} @Maquina=?`, [maquinaId]);
+//         const operacionPrincipal = todasLasOperaciones.find(op => op.Operacion_ID === operacionId);
+//         if (!operacionPrincipal) return res.status(404).json({ error: "No se encontró la operación principal" });
+
+//         const loteId = operacionPrincipal.Origen_Lote_ID || '00000000-0000-0000-0000-000000000000';
+
+//         // 2. Soporte e Inspección
+//         const rawInsp = await dbRegistracionNET.raw("EXEC SP_TraerInspeccionSlitter @Operacion_ID=?, @Lote_ID=?", [operacionId, loteId]);
+//         const inspeccionGral = Array.isArray(rawInsp) ? rawInsp[0] : rawInsp;
+//         const pasadasResult = await dbRegistracionNET.raw("SELECT Pasadas_Origen FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
+//         const pasadasOrigen = pasadasResult[0]?.Pasadas_Origen?.trim() || '1';
+
+//         // 3. Identificar Operaciones del Batch
+//         const multiOpResult = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacion @Operacion_ID=?", [operacionPrincipal.Operacion_ID]);
+//         const numeroMultiOperacion = multiOpResult.length > 0 ? multiOpResult[0].NumeroMultiOperacion : null;
+//         const operacionesInvolucradas = numeroMultiOperacion
+//             ? await dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacionporNumero @NumeroMultiOperacion=?", [numeroMultiOperacion])
+//             : [{ Operacion_ID: operacionId }];
+
+//         // 4. Lógica de NOTAS (CALIPSO y SRP)
+//         let tieneNotasCalipso = false;
+//         try {
+//             const [notasMatching, notasVarias, motivoBloqueo] = await Promise.all([
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasMatchingCalipso @OperacionID=?", [operacionId]),
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasCalipso @LoteID=?", [loteId]),
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerMotivoBloqueo @Operacion_id=?", [operacionId])
+//             ]);
+//             const nm = notasMatching?.[0] || {};
+//             const nv = notasVarias?.[0] || {};
+//             const mb = motivoBloqueo?.[0] || {};
+//             if (nm.NotasOperacion?.trim() || nv.NotasCalidad?.trim() || nv.NotasVarias?.trim() || (mb.MOTIVOBLOQUEO || mb.MotivoBloqueo)?.trim()) {
+//                 tieneNotasCalipso = true;
+//             }
+//         } catch (e) { console.warn("Error notas Calipso"); }
+
+//         let tieneNotasSRP = false;
+//         try {
+//             const [n1, n2, n3, n4] = await Promise.all([
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasCalidadRegistracion @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasCalidadUltimaOperacion @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasHorno @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasTraccion @Operacion_ID=?", [operacionId])
+//             ]);
+//             const check = (r) => r && r.length > 0 && Object.values(r[0]).some(v => v && String(v).trim() !== '');
+//             if (check(n1) || check(n2) || check(n3) || check(n4)) tieneNotasSRP = true;
+//         } catch (e) { console.warn("Error notas SRP"); }
+
+//         // 5. Procesar Grilla y Balance
+//         let lineasMap = new Map();
+//         let totalMerma = 0;
+//         let totalSobranteSO = 0, totalSobranteCal = 0, atadosSobrante = 0, rollosSobrante = 0;
+//         let totalScrapSeriado = 0, atadosScrapSeriado = 0, rollosScrapSeriado = 0;
+//         let totalScrapNoSeriado = 0, atadosScrapNoSeriado = 0, rollosScrapNoSeriado = 0;
+
+//         for (const op of operacionesInvolucradas) {
+//             const cortes = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesARegistrar @Operacion_ID=?", [op.Operacion_ID]);
+//             if (cortes.length > 0 && totalMerma === 0) totalMerma = parseFloat(cortes[0].KilosMermaE || 0);
+
+//             for (const corte of cortes) {
+//                 const anchoFormatted = parseFloat(corte.OperacionS_TotalAncho || 0).toFixed(2);
+//                 const key = `${anchoFormatted}-${corte.Operacion_C_Desc || ''}-${corte.Destino_Lote}`;
+
+//                 if (!lineasMap.has(key)) {
+//                     const rawReg = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradas @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?", 
+//                         [op.Operacion_ID, corte.Lote_IDS || '00000000-0000-0000-0000-000000000000', 0]);
+                    
+//                     const registrosArray = Array.isArray(rawReg) ? rawReg : [rawReg];
+//                     const regMasReciente = registrosArray
+//                         .filter(r => r && r.ID)
+//                         .sort((a, b) => new Date(b.FechaReg) - new Date(a.FechaReg))[0] || {};
+                    
+//                     const reg = regMasReciente;
+
+//                     lineasMap.set(key, {
+//                         Ancho: anchoFormatted, Cuchillas: corte.Operacion_Cuchillas, Tarea: corte.TareaDestino, Destino: corte.Destino_Lote,
+//                         Programados: 0, SobreOrden: parseFloat(reg?.Kilos_Sobreorden || 0), Calidad: parseFloat(reg?.Kilos_Calidad || 0),
+//                         TotAtados: parseInt(reg?.Atados || 0), TotRollos: parseInt(reg?.Rollos || 0), Lote_IDS: corte.Lote_IDS,
+//                         esSobrante: false, esScrap: false, Operacion_ID: op.Operacion_ID
+//                     });
+//                 }
+//                 lineasMap.get(key).Programados += parseFloat(corte.KilosProgramadosS || 0);
+//             }
+
+//             // === PROCESAR SOBRANTES (Sobrante = 1) ===
+//             const rawSob = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradasSobrante @Operacion_ID=?, @Sobrante=?", [op.Operacion_ID, 1]);
+//             (Array.isArray(rawSob) ? rawSob : [rawSob]).forEach(s => {
+//                 if(s) {
+//                     totalSobranteSO += parseFloat(s.Kilos_Sobreorden || 0);
+//                     totalSobranteCal += parseFloat(s.Kilos_Calidad || 0);
+//                     atadosSobrante += parseInt(s.Atados || 0);
+//                     rollosSobrante += parseInt(s.Rollos || 0);
+//                 }
+//             });
+
+//             // === PROCESAR SCRAP (Sobrante = 2) ===
+//             const rawScr = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradasSobrante @Operacion_ID=?, @Sobrante=?", [op.Operacion_ID, 2]);
+//             (Array.isArray(rawScr) ? rawScr : [rawScr]).forEach(s => {
+//                 if(s) {
+//                     const kilos = parseFloat(s.Kilos_Sobreorden || 0) + parseFloat(s.Kilos_Calidad || 0);
+//                     if (s.Lote_IDS?.toUpperCase() === SCRAP_NO_SERIADO_GUID) {
+//                         totalScrapNoSeriado += kilos;
+//                         atadosScrapNoSeriado += parseInt(s.Atados || 0);
+//                         rollosScrapNoSeriado += parseInt(s.Rollos || 0);
+//                     } else {
+//                         totalScrapSeriado += kilos;
+//                         atadosScrapSeriado += parseInt(s.Atados || 0);
+//                         rollosScrapSeriado += parseInt(s.Rollos || 0);
+//                     }
+//                 }
+//             });
+//         }
+
+//         const lineasArr = Array.from(lineasMap.values());
+        
+//         // === FICHA TÉCNICA - LÓGICA CORREGIDA (IGUAL QUE VB.NET) ===
+//         const codProdIntermedio = operacionPrincipal.Codigo_Producto || '';
+//         let fichaData = {
+//             Familia: 'N/A',
+//             Aleacion: 'N/A',
+//             Temple: 'N/A',
+//             Espesor: 'N/A',
+//             PaisOrigen: 'N/A',
+//             Recubrimiento: 'N/A',
+//             Calidad: 'N/A'
+//         };
+
+//         try {
+//             // Intento 1: Si es MP o PT, usar SP_TraerFichaTecnica con CodProd
+//             const codProdTipo = codProdIntermedio.length >= 7 ? codProdIntermedio.substring(5, 7) : '';
+            
+//             if ((codProdTipo === 'MP' || codProdTipo === 'PT') && codProdIntermedio) {
+//                 const fichaResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+//                 const f = fichaResult[0] || {};
+                
+//                 if (f && f.Familia) {
+//                     const espesorBase = parseFloat(f.Espesor || 0);
+//                     const espesorMax = (espesorBase + parseFloat(f.ESPESORMAX || 0)).toFixed(3);
+//                     const espesorMin = (espesorBase + parseFloat(f.ESPESORMIN || 0)).toFixed(3);
+                    
+//                     fichaData = {
+//                         Familia: f.Familia || 'N/A',
+//                         Aleacion: f.Aleacion || 'N/A',
+//                         Temple: f.Temple || 'N/A',
+//                         Espesor: `${f.Espesor || 'N/A'}   Máx:${espesorMax} Mín:${espesorMin}`,
+//                         PaisOrigen: f.ORIGEN || 'N/A',
+//                         Recubrimiento: f.Recubrimiento || 'N/A',
+//                         Calidad: f.CALIDADORI || 'N/A'
+//                     };
+//                 }
+//             }
+            
+//             // Intento 2: Si no encontró o no es MP/PT, usar SP_REG_TraerFichaTecnicaPPP con LoteID
+//             if (fichaData.Familia === 'N/A') {
+//                 const fichaPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [loteId]);
+//                 const fPPP = fichaPPP[0] || {};
+                
+//                 if (fPPP && fPPP.Material) {
+//                     const materialStr = fPPP.Material.toString();
+//                     const familiaFromMaterial = materialStr.length >= 10 ? materialStr.substring(8, 10) : materialStr;
+                    
+//                     fichaData = {
+//                         Familia: familiaFromMaterial,
+//                         Aleacion: fPPP.Aleacion || 'N/A',
+//                         Temple: fPPP.Temple || 'N/A',
+//                         Espesor: fPPP.Espesor ? parseFloat(fPPP.Espesor).toFixed(3) : 'N/A',
+//                         PaisOrigen: fPPP.PropioTercero || 'N/A',
+//                         Recubrimiento: fPPP.Cobertura || 'N/A',
+//                         Calidad: fPPP.Calidad || 'N/A'
+//                     };
+//                 }
+//             }
+//         } catch (e) {
+//             console.error("Error obteniendo ficha técnica:", e.message);
+//         }
+
+//         const rawTrans = await dbRegistracionNET.raw("SELECT Kilos_Balanza FROM Transacciones WHERE Operacion_ID = ?", [operacionId]);
+//         const kgsEntrantes = parseFloat(rawTrans[0]?.Kilos_Balanza || 0);
+
+//         // Sumatorias finales para el Header
+//         const totalAtadosReg = lineasArr.reduce((sum, l) => sum + (l.TotAtados || 0), 0) + atadosSobrante + atadosScrapSeriado + atadosScrapNoSeriado;
+//         const totalRollosReg = lineasArr.reduce((sum, l) => sum + (l.TotRollos || 0), 0) + rollosSobrante + rollosScrapSeriado + rollosScrapNoSeriado;
+
+//         res.status(200).json({
+//             header: {
+//                 Clientes: operacionPrincipal.Clientes,
+//                 SerieLote: operacionPrincipal.Origen_Lote ? operacionPrincipal.Origen_Lote.replace(" - Ingreso", "").trim() : 'N/A',
+//                 Matching: operacionPrincipal.Nro_Matching, 
+//                 Batch: operacionPrincipal.NroBatch, 
+//                 ScrapProgramado: totalMerma,
+//                 Cuchillas: operacionPrincipal.Operacion_Cuchillas, 
+//                 Pasadas: pasadasOrigen, 
+//                 Diametro: operacionPrincipal.Diametro || '420',
+//                 Corona: operacionPrincipal.CoronaE || '0', 
+//                 Stock: operacionPrincipal.Stock, 
+//                 maquinaId,
+//                 // DATOS DE FICHA TÉCNICA
+//                 ...fichaData,
+//                 Ancho: operacionPrincipal.Ancho || operacionPrincipal.TotalAncho || operacionPrincipal.Operacion_TotalAncho || 'N/A', 
+//                 CodigoProducto: operacionPrincipal.Codigo_Producto || '',
+//                 KgsProgramados: lineasArr.reduce((s, l) => s + l.Programados, 0),
+//                 CantAtados: totalAtadosReg,
+//                 CantRollos: totalRollosReg,
+//                 LoteID: loteId, 
+//                 inicioRevisado: inspeccionGral?.IniciaCorte === 1, 
+//                 finalRevisado: inspeccionGral?.FinalizaOperacion === 1,
+//                 tieneNotasCalipso, 
+//                 tieneNotasSRP
+//             },
+//             lineas: lineasArr,
+//             balance: {
+//                 kgsEntrantes,
+//                 programados: lineasArr.reduce((s, l) => s + l.Programados, 0),
+//                 sobreOrden: lineasArr.reduce((s, l) => s + l.SobreOrden, 0),
+//                 calidad: lineasArr.reduce((s, l) => s + l.Calidad, 0),
+//                 sobrante: totalSobranteSO + totalSobranteCal, 
+//                 atadosSobrante, 
+//                 rollosSobrante,
+//                 scrap: totalScrapSeriado + totalScrapNoSeriado, 
+//                 scrapSeriado: totalScrapSeriado, 
+//                 atadosScrapSeriado, 
+//                 rollosScrapSeriado,
+//                 scrapNoSeriado: totalScrapNoSeriado, 
+//                 atadosScrapNoSeriado, 
+//                 rollosScrapNoSeriado,
+//                 saldo: kgsEntrantes - (lineasArr.reduce((s, l) => s + l.SobreOrden + l.Calidad, 0) + (totalSobranteSO + totalSobranteCal) + (totalScrapSeriado + totalScrapNoSeriado))
+//             }
+//         });
+//     } catch (error) {
+//         console.error("ERROR BACKEND getDetalleOperacion:", error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
 const getDetalleOperacion = async (req, res) => {
+    console.log('🔥🔥 LLEGÓ A GETDETALLEOPERACION 🔥🔥🔥');
+    console.log('📋 req.params:', req.params);
+    console.log('📋 req.query:', req.query);
+
+
     const { operacionId } = req.params;
     const SCRAP_NO_SERIADO_GUID = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
 
@@ -531,66 +789,430 @@ const getDetalleOperacion = async (req, res) => {
 
         const lineasArr = Array.from(lineasMap.values());
         
-        // === FICHA TÉCNICA - LÓGICA CORREGIDA (IGUAL QUE VB.NET) ===
-        const codProdIntermedio = operacionPrincipal.Codigo_Producto || '';
-        let fichaData = {
-            Familia: 'N/A',
-            Aleacion: 'N/A',
-            Temple: 'N/A',
-            Espesor: 'N/A',
-            PaisOrigen: 'N/A',
-            Recubrimiento: 'N/A',
-            Calidad: 'N/A'
-        };
+        // // === FICHA TÉCNICA - LÓGICA CORREGIDA (IGUAL QUE VB.NET) ===
+        // const codProdIntermedio = operacionPrincipal.Codigo_Producto || '';
+        // let fichaData = {
+        //     Familia: 'N/A',
+        //     Aleacion: 'N/A',
+        //     Temple: 'N/A',
+        //     Espesor: 'N/A',
+        //     PaisOrigen: 'N/A',
+        //     Recubrimiento: 'N/A',
+        //     Calidad: 'N/A'
+        // };
 
-        try {
-            // Intento 1: Si es MP o PT, usar SP_TraerFichaTecnica con CodProd
-            const codProdTipo = codProdIntermedio.length >= 7 ? codProdIntermedio.substring(5, 7) : '';
+        // try {
+        //     // Verificar tipo de producto (posiciones 5-6 del código)
+        //     const codProdTipo = codProdIntermedio.length >= 7 ? codProdIntermedio.substring(5, 7) : '';
             
-            if ((codProdTipo === 'MP' || codProdTipo === 'PT') && codProdIntermedio) {
-                const fichaResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
-                const f = fichaResult[0] || {};
+        //     if ((codProdTipo === 'MP' || codProdTipo === 'PT') && codProdIntermedio) {
+        //         // === CASO 1: Es MP o PT ===
+        //         // Intento 1: Usar SP_TraerFichaTecnica con CodProd
+        //         const fichaResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+        //         const f = fichaResult[0] || {};
                 
-                if (f && f.Familia) {
-                    const espesorBase = parseFloat(f.Espesor || 0);
-                    const espesorMax = (espesorBase + parseFloat(f.ESPESORMAX || 0)).toFixed(3);
-                    const espesorMin = (espesorBase + parseFloat(f.ESPESORMIN || 0)).toFixed(3);
+        //         if (f && f.Familia) {
+        //             const espesorBase = parseFloat(f.Espesor || 0);
+        //             const espesorMax = (espesorBase + parseFloat(f.ESPESORMAX || 0)).toFixed(3);
+        //             const espesorMin = (espesorBase + parseFloat(f.ESPESORMIN || 0)).toFixed(3);
                     
-                    fichaData = {
-                        Familia: f.Familia || 'N/A',
-                        Aleacion: f.Aleacion || 'N/A',
-                        Temple: f.Temple || 'N/A',
-                        Espesor: `${f.Espesor || 'N/A'}   Máx:${espesorMax} Mín:${espesorMin}`,
-                        PaisOrigen: f.ORIGEN || 'N/A',
-                        Recubrimiento: f.Recubrimiento || 'N/A',
-                        Calidad: f.CALIDADORI || 'N/A'
-                    };
-                }
-            }
+        //             fichaData = {
+        //                 Familia: f.Familia || 'N/A',
+        //                 Aleacion: f.Aleacion || 'N/A',
+        //                 Temple: f.Temple || 'N/A',
+        //                 Espesor: `${f.Espesor || 'N/A'}   Máx:${espesorMax} Mín:${espesorMin}`,
+        //                 PaisOrigen: f.ORIGEN || 'N/A',
+        //                 Recubrimiento: f.Recubrimiento || 'N/A',
+        //                 Calidad: f.CALIDADORI || 'N/A'
+        //             };
+        //         } else {
+        //             // Intento 2: Si no encontró, usar SP_REG_TraerFichaTecnicaPPP
+        //             const fichaPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [loteId]);
+        //             const fPPP = fichaPPP[0] || {};
+                    
+        //             if (fPPP && fPPP.Material) {
+        //                 const materialStr = fPPP.Material.toString();
+        //                 // Solo hacer substring si es MP/PT y no encontró Familia
+        //                 const familiaFromMaterial = materialStr.length >= 10 ? materialStr.substring(8, 10) : materialStr;
+                        
+        //                 fichaData = {
+        //                     Familia: familiaFromMaterial,
+        //                     Aleacion: fPPP.Aleacion || 'N/A',
+        //                     Temple: fPPP.Temple || 'N/A',
+        //                     Espesor: fPPP.Espesor ? parseFloat(fPPP.Espesor).toFixed(3) : 'N/A',
+        //                     PaisOrigen: fPPP.PropioTercero || 'N/A',
+        //                     Recubrimiento: fPPP.Cobertura || 'N/A',
+        //                     Calidad: fPPP.Calidad || 'N/A'
+        //                 };
+        //             }
+        //         }
+        //     } else {
+        //         // === CASO 2: NO es MP ni PT (ej: PP, LF, etc.) ===
+        //         // Intento 1: Usar SP_REG_TraerFichaTecnicaPPP con LoteID
+        //         const fichaPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [loteId]);
+        //         const fPPP = fichaPPP[0] || {};
+                
+        //         if (fPPP && fPPP.Material) {
+        //             // ✅ CORRECCIÓN: Usar Material COMPLETO (sin substring) como en VB.NET
+        //             fichaData = {
+        //                 Familia: fPPP.Material.toString(),  // <-- SIN SUBSTRING
+        //                 Aleacion: fPPP.Aleacion || 'N/A',
+        //                 Temple: fPPP.Temple || 'N/A',
+        //                 Espesor: fPPP.Espesor ? parseFloat(fPPP.Espesor).toFixed(3) : 'N/A',
+        //                 PaisOrigen: fPPP.PropioTercero || 'N/A',
+        //                 Recubrimiento: fPPP.Cobertura || 'N/A',
+        //                 Calidad: fPPP.Calidad || 'N/A'
+        //             };
+        //         } else {
+        //             // Intento 2: Si no encontró, usar SP_TraerFichaTecnica
+        //             const fichaResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+        //             const f = fichaResult[0] || {};
+                    
+        //             if (f && f.Familia) {
+        //                 const espesorBase = parseFloat(f.Espesor || 0);
+        //                 const espesorMax = (espesorBase + parseFloat(f.ESPESORMAX || 0)).toFixed(3);
+        //                 const espesorMin = (espesorBase + parseFloat(f.ESPESORMIN || 0)).toFixed(3);
+                        
+        //                 fichaData = {
+        //                     Familia: f.Familia || 'N/A',
+        //                     Aleacion: f.Aleacion || 'N/A',
+        //                     Temple: f.Temple || 'N/A',
+        //                     Espesor: `${f.Espesor || 'N/A'}   Máx:${espesorMax} Mín:${espesorMin}`,
+        //                     PaisOrigen: f.ORIGEN || 'N/A',
+        //                     Recubrimiento: f.Recubrimiento || 'N/A',
+        //                     Calidad: f.CALIDADORI || 'N/A'
+        //                 };
+        //             }
+        //         }
+        //     }
+        // } catch (e) {
+        //     console.error("Error obteniendo ficha técnica:", e.message);
+        // }
+
+
+        // // === FICHA TÉCNICA - LÓGICA CORREGIDA ===
+        // const codProdIntermedio = operacionPrincipal.Codigo_Producto || '';
+        // let fichaData = {
+        //     Familia: 'N/A',
+        //     Aleacion: 'N/A',
+        //     Temple: 'N/A',
+        //     Espesor: 'N/A',
+        //     PaisOrigen: 'N/A',
+        //     Recubrimiento: 'N/A',
+        //     Calidad: 'N/A'
+        // };
+
+        // try {
+        //     // Verificar tipo de producto (posiciones 5-6 del código)
+        //     const codProdTipo = codProdIntermedio.length >= 7 ? codProdIntermedio.substring(5, 7) : '';
             
-            // Intento 2: Si no encontró o no es MP/PT, usar SP_REG_TraerFichaTecnicaPPP con LoteID
-            if (fichaData.Familia === 'N/A') {
-                const fichaPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [loteId]);
-                const fPPP = fichaPPP[0] || {};
+        //     if ((codProdTipo === 'MP' || codProdTipo === 'PT') && codProdIntermedio) {
+        //         // === CASO 1: Es MP o PT ===
+        //         // Intento 1: Usar SP_TraerFichaTecnica con CodProd
+        //         const fichaResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+        //         const f = fichaResult[0] || {};
                 
-                if (fPPP && fPPP.Material) {
-                    const materialStr = fPPP.Material.toString();
-                    const familiaFromMaterial = materialStr.length >= 10 ? materialStr.substring(8, 10) : materialStr;
+        //         if (f && f.Familia) {
+        //             const espesorBase = parseFloat(f.Espesor || 0);
+        //             const espesorMax = (espesorBase + parseFloat(f.ESPESORMAX || 0)).toFixed(3);
+        //             const espesorMin = (espesorBase + parseFloat(f.ESPESORMIN || 0)).toFixed(3);
                     
-                    fichaData = {
-                        Familia: familiaFromMaterial,
-                        Aleacion: fPPP.Aleacion || 'N/A',
-                        Temple: fPPP.Temple || 'N/A',
-                        Espesor: fPPP.Espesor ? parseFloat(fPPP.Espesor).toFixed(3) : 'N/A',
-                        PaisOrigen: fPPP.PropioTercero || 'N/A',
-                        Recubrimiento: fPPP.Cobertura || 'N/A',
-                        Calidad: fPPP.Calidad || 'N/A'
-                    };
-                }
+        //             fichaData = {
+        //                 Familia: f.Familia || 'N/A',
+        //                 Aleacion: f.Aleacion || 'N/A',
+        //                 Temple: f.Temple || 'N/A',
+        //                 Espesor: `${f.Espesor || 'N/A'}   Máx:${espesorMax} Mín:${espesorMin}`,
+        //                 PaisOrigen: f.ORIGEN || 'N/A',
+        //                 Recubrimiento: f.Recubrimiento || 'N/A',
+        //                 Calidad: f.CALIDADORI || 'N/A'
+        //             };
+        //         } else {
+        //             // Intento 2: Si no encontró, usar SP_REG_TraerFichaTecnicaPPP con substring
+        //             const fichaPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [loteId]);
+        //             const fPPP = fichaPPP[0] || {};
+                    
+        //             if (fPPP && fPPP.Material) {
+        //                 const materialStr = fPPP.Material.toString();
+        //                 // Para MP/PT que no encontró ficha, usar substring(8, 2)
+        //                 const familiaFromMaterial = materialStr.length >= 10 ? materialStr.substring(8, 10) : materialStr;
+                        
+        //                 fichaData = {
+        //                     Familia: familiaFromMaterial,
+        //                     Aleacion: fPPP.Aleacion || 'N/A',
+        //                     Temple: fPPP.Temple || 'N/A',
+        //                     Espesor: fPPP.Espesor ? parseFloat(fPPP.Espesor).toFixed(3) : 'N/A',
+        //                     PaisOrigen: fPPP.PropioTercero || 'N/A',
+        //                     Recubrimiento: fPPP.Cobertura || 'N/A',
+        //                     Calidad: fPPP.Calidad || 'N/A'
+        //                 };
+        //             }
+        //         }
+        //     } else {
+        //         // === CASO 2: NO es MP ni PT (ej: PP, LF, etc.) ===
+        //         // Intento 1: Usar SP_REG_TraerFichaTecnicaPPP con Material COMPLETO
+        //         const fichaPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [loteId]);
+        //         const fPPP = fichaPPP[0] || {};
+                
+        //         if (fPPP && fPPP.Material) {
+        //             // ✅ CORRECCIÓN: Usar Material COMPLETO (sin substring) como en VB.NET
+        //             fichaData = {
+        //                 Familia: fPPP.Material.toString(),  // <-- SIN SUBSTRING
+        //                 Aleacion: fPPP.Aleacion || 'N/A',
+        //                 Temple: fPPP.Temple || 'N/A',
+        //                 Espesor: fPPP.Espesor ? parseFloat(fPPP.Espesor).toFixed(3) : 'N/A',
+        //                 PaisOrigen: fPPP.PropioTercero || 'N/A',
+        //                 Recubrimiento: fPPP.Cobertura || 'N/A',
+        //                 Calidad: fPPP.Calidad || 'N/A'
+        //             };
+        //         } else {
+        //             // Intento 2: Si no encontró, usar SP_TraerFichaTecnica
+        //             const fichaResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+        //             const f = fichaResult[0] || {};
+                    
+        //             if (f && f.Familia) {
+        //                 const espesorBase = parseFloat(f.Espesor || 0);
+        //                 const espesorMax = (espesorBase + parseFloat(f.ESPESORMAX || 0)).toFixed(3);
+        //                 const espesorMin = (espesorBase + parseFloat(f.ESPESORMIN || 0)).toFixed(3);
+                        
+        //                 fichaData = {
+        //                     Familia: f.Familia || 'N/A',
+        //                     Aleacion: f.Aleacion || 'N/A',
+        //                     Temple: f.Temple || 'N/A',
+        //                     Espesor: `${f.Espesor || 'N/A'}   Máx:${espesorMax} Mín:${espesorMin}`,
+        //                     PaisOrigen: f.ORIGEN || 'N/A',
+        //                     Recubrimiento: f.Recubrimiento || 'N/A',
+        //                     Calidad: f.CALIDADORI || 'N/A'
+        //                 };
+        //             }
+        //         }
+        //     }
+        // } catch (e) {
+        //     console.error("Error obteniendo ficha técnica:", e.message);
+        // }
+
+        // // === FICHA TÉCNICA - LÓGICA CORREGIDA ===
+        // const codProdIntermedio = operacionPrincipal.Codigo_Producto || '';
+        // let fichaData = {
+        //     Familia: 'N/A',
+        //     Aleacion: 'N/A',
+        //     Temple: 'N/A',
+        //     Espesor: 'N/A',
+        //     PaisOrigen: 'N/A',
+        //     Recubrimiento: 'N/A',
+        //     Calidad: 'N/A'
+        // };
+
+        // try {
+        //     // Verificar tipo de producto (posiciones 5-6 del código)
+        //     const codProdTipo = codProdIntermedio.length >= 7 ? codProdIntermedio.substring(5, 7) : '';
+            
+        //     if ((codProdTipo === 'MP' || codProdTipo === 'PT') && codProdIntermedio) {
+        //         // === CASO 1: Es MP o PT ===
+        //         const fichaResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+        //         const f = fichaResult[0] || {};
+                
+        //         if (f && f.Familia) {
+        //             const espesorBase = parseFloat(f.Espesor || 0);
+        //             const espesorMax = (espesorBase + parseFloat(f.ESPESORMAX || 0)).toFixed(3);
+        //             const espesorMin = (espesorBase + parseFloat(f.ESPESORMIN || 0)).toFixed(3);
+                    
+        //             fichaData = {
+        //                 Familia: f.Familia || 'N/A',
+        //                 Aleacion: f.Aleacion || 'N/A',
+        //                 Temple: f.Temple || 'N/A',
+        //                 Espesor: `${f.Espesor || 'N/A'}   Máx:${espesorMax} Mín:${espesorMin}`,
+        //                 PaisOrigen: f.ORIGEN || 'N/A',
+        //                 Recubrimiento: f.Recubrimiento || 'N/A',
+        //                 Calidad: f.CALIDADORI || 'N/A'
+        //             };
+        //         } else {
+        //             // Fallback a PPP solo si no encontró por CodProd
+        //             const fichaPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [loteId]);
+        //             const fPPP = fichaPPP[0] || {};
+                    
+        //             if (fPPP && fPPP.Material) {
+        //                 const materialStr = fPPP.Material.toString();
+        //                 // Para MP/PT que no encontró ficha, usar substring(8, 2)
+        //                 const familiaFromMaterial = materialStr.length >= 10 ? materialStr.substring(8, 10) : materialStr;
+                        
+        //                 fichaData = {
+        //                     Familia: familiaFromMaterial,
+        //                     Aleacion: fPPP.Aleacion || 'N/A',
+        //                     Temple: fPPP.Temple || 'N/A',
+        //                     Espesor: fPPP.Espesor ? parseFloat(fPPP.Espesor).toFixed(3) : 'N/A',
+        //                     PaisOrigen: fPPP.PropioTercero || 'N/A',
+        //                     Recubrimiento: fPPP.Cobertura || 'N/A',
+        //                     Calidad: fPPP.Calidad || 'N/A'
+        //                 };
+        //             }
+        //         }
+        //     } else {
+        //         // === CASO 2: NO es MP ni PT (ej: PP, LF, etc.) ===
+        //         // Intento 1: Usar SP_REG_TraerFichaTecnicaPPP con Material COMPLETO
+        //         const fichaPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [loteId]);
+        //         const fPPP = fichaPPP[0] || {};
+                
+        //         if (fPPP && fPPP.Material) {
+        //             // ✅ CORRECCIÓN DEFINITIVA: Usar Material COMPLETO (sin substring)
+        //             fichaData = {
+        //                 Familia: fPPP.Material.toString(),  // <-- SIN SUBSTRING
+        //                 Aleacion: fPPP.Aleacion || 'N/A',
+        //                 Temple: fPPP.Temple || 'N/A',
+        //                 Espesor: fPPP.Espesor ? parseFloat(fPPP.Espesor).toFixed(3) : 'N/A',
+        //                 PaisOrigen: fPPP.PropioTercero || 'N/A',
+        //                 Recubrimiento: fPPP.Cobertura || 'N/A',
+        //                 Calidad: fPPP.Calidad || 'N/A'
+        //             };
+        //         } else {
+        //             // Fallback a SP_TraerFichaTecnica
+        //             const fichaResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+        //             const f = fichaResult[0] || {};
+                    
+        //             if (f && f.Familia) {
+        //                 const espesorBase = parseFloat(f.Espesor || 0);
+        //                 const espesorMax = (espesorBase + parseFloat(f.ESPESORMAX || 0)).toFixed(3);
+        //                 const espesorMin = (espesorBase + parseFloat(f.ESPESORMIN || 0)).toFixed(3);
+                        
+        //                 fichaData = {
+        //                     Familia: f.Familia || 'N/A',
+        //                     Aleacion: f.Aleacion || 'N/A',
+        //                     Temple: f.Temple || 'N/A',
+        //                     Espesor: `${f.Espesor || 'N/A'}   Máx:${espesorMax} Mín:${espesorMin}`,
+        //                     PaisOrigen: f.ORIGEN || 'N/A',
+        //                     Recubrimiento: f.Recubrimiento || 'N/A',
+        //                     Calidad: f.CALIDADORI || 'N/A'
+        //                 };
+        //             }
+        //         }
+        //     }
+        // } catch (e) {
+        //     console.error("Error obteniendo ficha técnica:", e.message);
+        // }
+
+        // === FICHA TÉCNICA - CON LOGS DETALLADOS ===
+const codProdIntermedio = operacionPrincipal.Codigo_Producto || '';
+let fichaData = {
+    Familia: 'N/A',
+    Aleacion: 'N/A',
+    Temple: 'N/A',
+    Espesor: 'N/A',
+    PaisOrigen: 'N/A',
+    Recubrimiento: 'N/A',
+    Calidad: 'N/A'
+};
+
+console.log('=== DEBUG FICHA TÉCNICA ===');
+console.log('Código de Producto:', codProdIntermedio);
+console.log('LoteID:', loteId);
+
+try {
+    // Verificar tipo de producto (posiciones 5-6 del código)
+    const codProdTipo = codProdIntermedio.length >= 7 ? codProdIntermedio.substring(5, 7) : '';
+    console.log('Tipo de producto (pos 5-7):', codProdTipo);
+    
+    if ((codProdTipo === 'MP' || codProdTipo === 'PT') && codProdIntermedio) {
+        console.log('>>> Es MP o PT - Intentando SP_TraerFichaTecnica con CodProd');
+        const fichaResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+        const f = fichaResult[0] || {};
+        console.log('Resultado SP_TraerFichaTecnica:', JSON.stringify(f, null, 2));
+        
+        if (f && f.Familia) {
+            console.log('✅ Encontró Familia en SP_TraerFichaTecnica:', f.Familia);
+            const espesorBase = parseFloat(f.Espesor || 0);
+            const espesorMax = (espesorBase + parseFloat(f.ESPESORMAX || 0)).toFixed(3);
+            const espesorMin = (espesorBase + parseFloat(f.ESPESORMIN || 0)).toFixed(3);
+            
+            fichaData = {
+                Familia: f.Familia || 'N/A',
+                Aleacion: f.Aleacion || 'N/A',
+                Temple: f.Temple || 'N/A',
+                Espesor: `${f.Espesor || 'N/A'}   Máx:${espesorMax} Mín:${espesorMin}`,
+                PaisOrigen: f.ORIGEN || 'N/A',
+                Recubrimiento: f.Recubrimiento || 'N/A',
+                Calidad: f.CALIDADORI || 'N/A'
+            };
+        } else {
+            console.log('⚠️ No encontró Familia en SP_TraerFichaTecnica, intentando PPP');
+            const fichaPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [loteId]);
+            const fPPP = fichaPPP[0] || {};
+            console.log('Resultado SP_REG_TraerFichaTecnicaPPP:', JSON.stringify(fPPP, null, 2));
+            
+            if (fPPP && fPPP.Material) {
+                console.log('Campo Material completo:', fPPP.Material);
+                console.log('Longitud de Material:', fPPP.Material.toString().length);
+                const materialStr = fPPP.Material.toString();
+                const familiaFromMaterial = materialStr.length >= 10 ? materialStr.substring(8, 10) : materialStr;
+                console.log('Familia extraída (substring 8,2):', familiaFromMaterial);
+                
+                fichaData = {
+                    Familia: familiaFromMaterial,
+                    Aleacion: fPPP.Aleacion || 'N/A',
+                    Temple: fPPP.Temple || 'N/A',
+                    Espesor: fPPP.Espesor ? parseFloat(fPPP.Espesor).toFixed(3) : 'N/A',
+                    PaisOrigen: fPPP.PropioTercero || 'N/A',
+                    Recubrimiento: fPPP.Cobertura || 'N/A',
+                    Calidad: fPPP.Calidad || 'N/A'
+                };
             }
-        } catch (e) {
-            console.error("Error obteniendo ficha técnica:", e.message);
         }
+    } else {
+        console.log('>>> NO es MP ni PT - Intentando SP_REG_TraerFichaTecnicaPPP PRIMERO');
+        const fichaPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [loteId]);
+        const fPPP = fichaPPP[0] || {};
+        console.log('=== RESULTADO SP_REG_TraerFichaTecnicaPPP ===');
+        console.log('Objeto completo:', JSON.stringify(fPPP, null, 2));
+        
+        if (fPPP && fPPP.Material) {
+            console.log('✅ ENCONTRÓ Material en PPP');
+            console.log('Tipo de dato Material:', typeof fPPP.Material);
+            console.log('Valor de Material:', fPPP.Material);
+            console.log('Material.toString():', fPPP.Material.toString());
+            console.log('Longitud:', fPPP.Material.toString().length);
+            
+            // ✅ CORRECCIÓN: Usar Material COMPLETO (sin substring)
+            console.log('>>> USANDO MATERIAL COMPLETO:', fPPP.Material.toString());
+            
+            fichaData = {
+                Familia: fPPP.Material.toString(),  // <-- SIN SUBSTRING
+                Aleacion: fPPP.Aleacion || 'N/A',
+                Temple: fPPP.Temple || 'N/A',
+                Espesor: fPPP.Espesor ? parseFloat(fPPP.Espesor).toFixed(3) : 'N/A',
+                PaisOrigen: fPPP.PropioTercero || 'N/A',
+                Recubrimiento: fPPP.Cobertura || 'N/A',
+                Calidad: fPPP.Calidad || 'N/A'
+            };
+            console.log('✅ Familia asignada:', fichaData.Familia);
+        } else {
+            console.log('⚠️ NO encontró Material en PPP, intentando SP_TraerFichaTecnica');
+            const fichaResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+            const f = fichaResult[0] || {};
+            console.log('Resultado SP_TraerFichaTecnica:', JSON.stringify(f, null, 2));
+            
+            if (f && f.Familia) {
+                const espesorBase = parseFloat(f.Espesor || 0);
+                const espesorMax = (espesorBase + parseFloat(f.ESPESORMAX || 0)).toFixed(3);
+                const espesorMin = (espesorBase + parseFloat(f.ESPESORMIN || 0)).toFixed(3);
+                
+                fichaData = {
+                    Familia: f.Familia || 'N/A',
+                    Aleacion: f.Aleacion || 'N/A',
+                    Temple: f.Temple || 'N/A',
+                    Espesor: `${f.Espesor || 'N/A'}   Máx:${espesorMax} Mín:${espesorMin}`,
+                    PaisOrigen: f.ORIGEN || 'N/A',
+                    Recubrimiento: f.Recubrimiento || 'N/A',
+                    Calidad: f.CALIDADORI || 'N/A'
+                };
+            }
+        }
+    }
+    
+    console.log('=== DATOS FINALES DE FICHA TÉCNICA ===');
+    console.log(JSON.stringify(fichaData, null, 2));
+    console.log('===============================\n');
+    
+} catch (e) {
+    console.error("❌ ERROR obteniendo ficha técnica:", e.message);
+}
 
         const rawTrans = await dbRegistracionNET.raw("SELECT Kilos_Balanza FROM Transacciones WHERE Operacion_ID = ?", [operacionId]);
         const kgsEntrantes = parseFloat(rawTrans[0]?.Kilos_Balanza || 0);
@@ -649,6 +1271,252 @@ const getDetalleOperacion = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+
+
+
+
+
+
+
+
+
+// const getDetalleOperacion = async (req, res) => {
+//     console.log("================================================================");
+//     console.log("🚀 [BACKEND] ENTRANDO A getDetalleOperacion");
+//     console.log("================================================================");
+
+//     console.log('🔍 DEBUG FAMILIA - Operación:', operacionId);
+//     console.log('🔍 DEBUG FAMILIA - Codigo_Producto:', operacionPrincipal.Codigo_Producto);
+//     console.log('🔍 DEBUG FAMILIA - Resultado fichaData:', fichaData.Familia);
+
+//     const { operacionId } = req.params;
+//     const SCRAP_NO_SERIADO_GUID = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
+    
+//     try {
+//         // 1. Obtener máquina y operación principal
+//         console.log(`🔍 Buscando Operación ID: ${operacionId}`);
+//         const rawMaquina = await dbRegistracionNET.raw("SELECT Maquina FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
+//         const opMaquinaInfo = Array.isArray(rawMaquina) ? rawMaquina[0] : rawMaquina;
+        
+//         if (!opMaquinaInfo) {
+//             console.warn("⚠️ Operación no encontrada en DB.");
+//             return res.status(404).json({ error: "Operación no encontrada" });
+//         }
+        
+//         const maquinaId = opMaquinaInfo.Maquina;
+//         const spName = (maquinaId === 'EMB') ? 'SP_TraerOperacionesPorMaquinaEmbalaje' : 'SP_TraerOperacionesPorMaquina';
+        
+//         console.log(`⚙️ Máquina detectada: ${maquinaId} -> Ejecutando ${spName}`);
+//         const todasLasOperaciones = await dbRegistracionNET.raw(`EXEC ${spName} @Maquina=?`, [maquinaId]);
+//         const operacionPrincipal = todasLasOperaciones.find(op => op.Operacion_ID === operacionId);
+        
+//         if (!operacionPrincipal) {
+//             console.error("❌ No se encontró la operación principal en la lista de la máquina.");
+//             return res.status(404).json({ error: "No se encontró la operación principal" });
+//         }
+        
+//         const loteId = operacionPrincipal.Origen_Lote_ID || '00000000-0000-0000-0000-000000000000';
+//         console.log(`✅ Operación Principal Encontrada. LoteID: ${loteId}`);
+
+//         // 2. Soporte e Inspección
+//         const rawInsp = await dbRegistracionNET.raw("EXEC SP_TraerInspeccionSlitter @Operacion_ID=?, @Lote_ID=?", [operacionId, loteId]);
+//         const inspeccionGral = Array.isArray(rawInsp) ? rawInsp[0] : rawInsp;
+        
+//         const pasadasResult = await dbRegistracionNET.raw("SELECT Pasadas_Origen FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
+//         const pasadasOrigen = pasadasResult[0]?.Pasadas_Origen?.trim() || '1';
+        
+//         console.log("📊 Inspección y Pasadas cargadas.");
+
+//         // 3. Identificar Operaciones del Batch
+//         const multiOpResult = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacion @Operacion_ID=?", [operacionPrincipal.Operacion_ID]);
+//         const numeroMultiOperacion = multiOpResult.length > 0 ? multiOpResult[0].NumeroMultiOperacion : null;
+//         const operacionesInvolucradas = numeroMultiOperacion
+//             ? await dbRegistracionNET.raw("EXEC SP_TraerOperacionesMultiOperacionporNumero @NumeroMultiOperacion=?", [numeroMultiOperacion])
+//             : [{ Operacion_ID: operacionId }];
+
+//         // 4. Lógica de NOTAS (CALIPSO y SRP)
+//         let tieneNotasCalipso = false;
+//         try {
+//             const [notasMatching, notasVarias, motivoBloqueo] = await Promise.all([
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasMatchingCalipso @OperacionID=?", [operacionId]),
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasCalipso @LoteID=?", [loteId]),
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerMotivoBloqueo @Operacion_id=?", [operacionId])
+//             ]);
+//             const nm = notasMatching?.[0] || {};
+//             const nv = notasVarias?.[0] || {};
+//             const mb = motivoBloqueo?.[0] || {};
+//             if (nm.NotasOperacion?.trim() || nv.NotasCalidad?.trim() || nv.NotasVarias?.trim() || (mb.MOTIVOBLOQUEO || mb.MotivoBloqueo)?.trim()) {
+//                 tieneNotasCalipso = true;
+//             }
+//         } catch (e) { console.warn("Error verificando notas Calipso:", e.message); }
+
+//         let tieneNotasSRP = false;
+//         try {
+//             const [n1, n2, n3, n4] = await Promise.all([
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasCalidadRegistracion @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasCalidadUltimaOperacion @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasHorno @Operacion_ID=?", [operacionId]),
+//                 dbRegistracionNET.raw("EXEC SP_TraerNotasTraccion @Operacion_ID=?", [operacionId])
+//             ]);
+//             const check = (r) => r && r.length > 0 && Object.values(r[0]).some(v => v && String(v).trim() !== '');
+//             if (check(n1) || check(n2) || check(n3) || check(n4)) tieneNotasSRP = true;
+//         } catch (e) { console.warn("Error verificando notas SRP:", e.message); }
+
+//         // 5. Procesar Grilla y Balance
+//         let lineasMap = new Map();
+//         let totalMerma = 0;
+//         let totalSobranteSO = 0, totalSobranteCal = 0, atadosSobrante = 0, rollosSobrante = 0;
+//         let totalScrapSeriado = 0, atadosScrapSeriado = 0;
+//         let totalScrapNoSeriado = 0, atadosScrapNoSeriado = 0;
+
+//         for (const op of operacionesInvolucradas) {
+//             const cortes = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesARegistrar @Operacion_ID=?", [op.Operacion_ID]);
+//             if (cortes.length > 0 && totalMerma === 0) totalMerma = parseFloat(cortes[0].KilosMermaE || 0);
+
+//             for (const corte of cortes) {
+//                 const anchoFormatted = parseFloat(corte.OperacionS_TotalAncho || 0).toFixed(2);
+//                 const key = `${anchoFormatted}-${corte.Operacion_C_Desc || ''}-${corte.Destino_Lote}`;
+
+//                 if (!lineasMap.has(key)) {
+//                     const rawReg = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradas @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?",
+//                         [op.Operacion_ID, corte.Lote_IDS || '00000000-0000-0000-0000-000000000000', 0]);
+//                     const reg = Array.isArray(rawReg) ? rawReg[0] : rawReg;
+                    
+//                     lineasMap.set(key, {
+//                         Ancho: anchoFormatted, Cuchillas: corte.Operacion_Cuchillas, Tarea: corte.TareaDestino, Destino: corte.Destino_Lote,
+//                         Programados: 0, SobreOrden: parseFloat(reg?.Kilos_Sobreorden || 0), Calidad: parseFloat(reg?.Kilos_Calidad || 0),
+//                         TotAtados: parseInt(reg?.Atados || 0), TotRollos: parseInt(reg?.Rollos || 0), Lote_IDS: corte.Lote_IDS,
+//                         esSobrante: false, esScrap: false, Operacion_ID: op.Operacion_ID
+//                     });
+//                 }
+//                 lineasMap.get(key).Programados += parseFloat(corte.KilosProgramadosS || 0);
+//             }
+
+//             const rawSob = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradasSobrante @Operacion_ID=?, @Sobrante=?", [op.Operacion_ID, 1]);
+//             (Array.isArray(rawSob) ? rawSob : [rawSob]).forEach(s => {
+//                 if(s) {
+//                     totalSobranteSO += parseFloat(s.Kilos_Sobreorden || 0);
+//                     totalSobranteCal += parseFloat(s.Kilos_Calidad || 0);
+//                     atadosSobrante += parseInt(s.Atados || 0);
+//                     rollosSobrante += parseInt(s.Rollos || 0);
+//                 }
+//             });
+
+//             const rawScr = await dbRegistracionNET.raw("EXEC SP_TraerOperacionesRegistradasSobrante @Operacion_ID=?, @Sobrante=?", [op.Operacion_ID, 2]);
+//             (Array.isArray(rawScr) ? rawScr : [rawScr]).forEach(s => {
+//                 if(s) {
+//                     const kilos = parseFloat(s.Kilos_Sobreorden || 0) + parseFloat(s.Kilos_Calidad || 0);
+//                     if (s.Lote_IDS?.toUpperCase() === SCRAP_NO_SERIADO_GUID) {
+//                         totalScrapNoSeriado += kilos;
+//                         atadosScrapNoSeriado += parseInt(s.Atados || 0);
+//                     } else {
+//                         totalScrapSeriado += kilos;
+//                         atadosScrapSeriado += parseInt(s.Atados || 0);
+//                     }
+//                 }
+//             });
+//         }
+
+//         const lineasArr = Array.from(lineasMap.values());
+//         console.log(`📏 Líneas de grilla procesadas: ${lineasArr.length}`);
+
+//         // --- LÓGICA DE FICHA TÉCNICA CON FALLBACK ---
+//         console.log("📄 Intentando obtener Ficha Técnica...");
+//         let f = {};
+        
+//         // Intento 1: SP Estándar
+//         const fichaResult = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [operacionPrincipal.Codigo_Producto]);
+//         if (fichaResult && fichaResult.length > 0) {
+//             f = fichaResult[0];
+//             console.log("✅ Ficha técnica encontrada con SP_TraerFichaTecnica. Familia:", f.Familia);
+//         } else {
+//             console.log("⚠️ Ficha técnica vacía con SP estándar. Intentando fallback con PPP...");
+//             // Intento 2: Fallback (SP_REG_TraerFichaTecnicaPPP) para obtener nombre completo
+//             try {
+//                 const fichaPPP = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [loteId]);
+//                 if (fichaPPP && fichaPPP.length > 0) {
+//                     const dataPPP = fichaPPP[0];
+//                     f = {
+//                         Familia: dataPPP.Material || 'N/A', // Usa el campo Material completo
+//                         Aleacion: dataPPP.Aleacion || 'N/A',
+//                         Temple: dataPPP.Temple || 'N/A',
+//                         Espesor: dataPPP.Espesor || 'N/A',
+//                         PaisOrigen: dataPPP.PropioTercero || 'N/A',
+//                         Recubrimiento: dataPPP.Cobertura || 'N/A',
+//                         Calidad: dataPPP.Calidad || 'N/A'
+//                     };
+//                     console.log("✅ Ficha técnica obtenida con Fallback (PPP). Familia:", f.Familia);
+//                 }
+//             } catch (err) {
+//                 console.error("❌ Error en el fallback de Ficha Técnica:", err.message);
+//             }
+//         }
+//         // --------------------------------------------
+
+//         const rawTrans = await dbRegistracionNET.raw("SELECT Kilos_Balanza FROM Transacciones WHERE Operacion_ID = ?", [operacionId]);
+//         const kgsEntrantes = parseFloat(rawTrans[0]?.Kilos_Balanza || 0);
+
+//         // Sumatorias finales para el Header
+//         const totalAtadosReg = lineasArr.reduce((sum, l) => sum + (l.TotAtados || 0), 0) + atadosSobrante + atadosScrapSeriado;
+//         const totalRollosReg = lineasArr.reduce((sum, l) => sum + (l.TotRollos || 0), 0) + rollosSobrante;
+
+//         const header = {
+//             Clientes: operacionPrincipal.Clientes,
+//             SerieLote: operacionPrincipal.Origen_Lote ? operacionPrincipal.Origen_Lote.replace(" - Ingreso", "").trim() : 'N/A',
+//             Matching: operacionPrincipal.Nro_Matching, 
+//             Batch: operacionPrincipal.NroBatch, 
+//             ScrapProgramado: totalMerma,
+//             Cuchillas: operacionPrincipal.Operacion_Cuchillas, 
+//             Pasadas: pasadasOrigen, 
+//             Diametro: operacionPrincipal.Diametro || '420',
+//             Corona: operacionPrincipal.CoronaE || '0', 
+//             Stock: operacionPrincipal.Stock, 
+//             maquinaId,
+//             // MAPEO DE FICHA TÉCNICA
+//             Familia: f.Familia || 'N/A',
+//             Aleacion: f.Aleacion || 'N/A',
+//             Temple: f.Temple || 'N/A',
+//             Espesor: f.Espesor || 'N/A',
+//             PaisOrigen: f.ORIGEN || f.PaisOrigen || 'N/A', 
+//             Recubrimiento: f.Recubrimiento || 'N/A',
+//             Calidad: f.CALIDADORI || f.Calidad || 'N/A', 
+//             Ancho: operacionPrincipal.Ancho || operacionPrincipal.TotalAncho || operacionPrincipal.Operacion_TotalAncho || 'N/A',
+//             KgsProgramados: lineasArr.reduce((s, l) => s + l.Programados, 0),
+//             CantAtados: totalAtadosReg,
+//             CantRollos: totalRollosReg,
+//             LoteID: loteId, 
+//             inicioRevisado: inspeccionGral?.IniciaCorte === 1, 
+//             finalRevisado: inspeccionGral?.FinalizaOperacion === 1,
+//             tieneNotasCalipso, 
+//             tieneNotasSRP
+//         };
+
+//         const balance = {
+//             kgsEntrantes,
+//             programados: lineasArr.reduce((s, l) => s + l.Programados, 0),
+//             sobreOrden: lineasArr.reduce((s, l) => s + l.SobreOrden, 0),
+//             calidad: lineasArr.reduce((s, l) => s + l.Calidad, 0),
+//             sobrante: totalSobranteSO + totalSobranteCal, 
+//             atadosSobrante, 
+//             rollosSobrante,
+//             scrap: totalScrapSeriado + totalScrapNoSeriado, 
+//             scrapSeriado: totalScrapSeriado, 
+//             atadosScrapSeriado,
+//             scrapNoSeriado: totalScrapNoSeriado, 
+//             atadosScrapNoSeriado,
+//             saldo: kgsEntrantes - (lineasArr.reduce((s, l) => s + l.SobreOrden + l.Calidad, 0) + (totalSobranteSO + totalSobranteCal) + (totalScrapSeriado + totalScrapNoSeriado))
+//         };
+
+//         console.log("🏁 Enviando respuesta exitosa al frontend.");
+//         res.status(200).json({ header, lineas: lineasArr, balance });
+
+//     } catch (error) {
+//         // ESTE ES EL LOG CRÍTICO QUE TE FALTABA
+//         console.error("💥 ERROR CRÍTICO en getDetalleOperacion:", error);
+//         console.error("💥 Stack Trace:", error.stack);
+//         res.status(500).json({ error: "Error interno del servidor.", details: error.message });
+//     }
+// };
 
 // ============================================================================
 // getDetalleOperacionEmbalaje - VERSIÓN CORREGIDA (RESPETANDO STORED PROCEDURES)
