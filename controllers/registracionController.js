@@ -1253,12 +1253,8 @@ const getCodigoMerma = getCodigoProductoMerma; // Alias para que funcionen ambas
 const obtenerAtadosRegistrados = async (req, res) => {
     const { operacionId, loteIds, sobrante } = req.body;
 
-    console.log("🟢 obtenerAtadosRegistrados llamado con:");
-    console.log("   operacionId:", operacionId);
-    console.log("   loteIds:", loteIds);
-    console.log("   sobrante:", sobrante);
-
     // VALIDACIÓN DE SEGURIDAD:
+    // Si loteIds es una cadena vacía o "null" (string), lo convertimos a null real
     const loteIdsLimpio = (loteIds === '' || loteIds === 'null' || !loteIds) ? null : loteIds;
 
     try {
@@ -1266,37 +1262,24 @@ const obtenerAtadosRegistrados = async (req, res) => {
         const esSobrante = sobrante === 1;
 
         if (esSobrante) {
-            // Para SOBRANTE usar SP_TraerAtadosRegistradosPlancha
-            console.log("📋 Ejecutando SP_TraerAtadosRegistradosPlancha...");
             const rawRes = await dbRegistracionNET.raw(
                 "EXEC SP_TraerAtadosRegistradosPlancha @Operacion_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?",
                 [operacionId, 0, sobrante, loteIdsLimpio]
             );
+            // Manejo de respuesta MSSQL (a veces viene anidado)
             resultados = Array.isArray(rawRes) ? rawRes : [];
         } else {
-            // Para EMBALAJE NORMAL usar SP_TraerAtadosRegistrados
-            console.log("📋 Ejecutando SP_TraerAtadosRegistrados...");
             const rawRes = await dbRegistracionNET.raw(
                 "EXEC SP_TraerAtadosRegistrados @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?",
                 [operacionId, loteIdsLimpio, sobrante]
             );
-            console.log("📊 Resultado raw:", rawRes);
             resultados = Array.isArray(rawRes) ? rawRes : [];
-        }
-
-        console.log(`✅ Encontrados ${resultados.length} atados registrados`);
-        if (resultados.length > 0) {
-            console.log("📦 Primer atado:", resultados[0]);
         }
 
         res.status(200).json(resultados);
     } catch (error) {
-        console.error("❌ Error al obtener atados registrados:", error);
-        console.error("Stack:", error.stack);
-        res.status(500).json({ 
-            error: "Error al obtener atados", 
-            details: error.message 
-        });
+        console.error("Error al obtener atados registrados:", error);
+        res.status(500).json({ error: "Error al obtener atados", details: error.message });
     }
 };
 
