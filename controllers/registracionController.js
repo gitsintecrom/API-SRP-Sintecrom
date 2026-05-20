@@ -1250,40 +1250,6 @@ const getCodigoProductoMerma = async (req, res) => {
 
 const getCodigoMerma = getCodigoProductoMerma; // Alias para que funcionen ambas rutas
 
-// const obtenerAtadosRegistrados = async (req, res) => {
-//     const { operacionId, loteIds, sobrante } = req.body;
-
-//     // VALIDACIÓN DE SEGURIDAD:
-//     // Si loteIds es una cadena vacía o "null" (string), lo convertimos a null real
-//     const loteIdsLimpio = (loteIds === '' || loteIds === 'null' || !loteIds) ? null : loteIds;
-
-//     try {
-//         let resultados;
-//         const esSobrante = sobrante === 1;
-
-//         if (esSobrante) {
-//             const rawRes = await dbRegistracionNET.raw(
-//                 "EXEC SP_TraerAtadosRegistradosPlancha @Operacion_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?",
-//                 [operacionId, 0, sobrante, loteIdsLimpio]
-//             );
-//             // Manejo de respuesta MSSQL (a veces viene anidado)
-//             resultados = Array.isArray(rawRes) ? rawRes : [];
-//         } else {
-//             const rawRes = await dbRegistracionNET.raw(
-//                 "EXEC SP_TraerAtadosRegistrados @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?",
-//                 [operacionId, loteIdsLimpio, sobrante]
-//             );
-//             resultados = Array.isArray(rawRes) ? rawRes : [];
-//         }
-
-//         res.status(200).json(resultados);
-//     } catch (error) {
-//         console.error("Error al obtener atados registrados:", error);
-//         res.status(500).json({ error: "Error al obtener atados", details: error.message });
-//     }
-// };
-
-
 const obtenerAtadosRegistrados = async (req, res) => {
     const { operacionId, loteIds, sobrante } = req.body;
 
