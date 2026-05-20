@@ -1030,6 +1030,181 @@ const updateOperacion = async (req, res) => {
     }
 };
 
+// const registrarPesaje = async (req, res) => {
+//     const { operacionId, loteIds, sobrante, atados, usuario } = req.body;
+//     const lineaData = req.body.lineaData || {};
+
+//     // ✅ OBTENER FECHA EN FORMATO ARGENTINA (YYYY-MM-DD HH:mm:ss)
+//     const fechaArgentina = new Date().toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
+
+//     if (!operacionId || !atados || atados.length === 0) {
+//         return res.status(400).json({ error: "Datos insuficientes para registrar." });
+//     }
+
+//     const transaction = await dbRegistracionNET.transaction();
+
+//     try {
+//         // 1. OBTENER INFORMACIÓN DE LA OPERACIÓN PRINCIPAL
+//         const [opInfo] = await transaction.raw(
+//             `SELECT Maquina, NroBatch, Codigo_Producto, Origen_Lote, Origen_Lote_ID, Operacion_Cuchillas, Nro_Matching, Tarea 
+//              FROM OperacionesCalipso 
+//              WHERE Operacion_ID = ?`, 
+//             [operacionId]
+//         );
+
+//         console.log("opInfo.......................:", opInfo);
+        
+
+//         if (!opInfo) throw new Error("No se encontró información de la operación principal.");
+
+//         // 2. DETERMINAR IDs Y DESTINOS
+//         let loteIDSFinal = lineaData.Lote_IDS || lineaData.LoteID || loteIds || null;
+//         let destinoLoteFinal = lineaData?.Destino || lineaData?.SerieLote || opInfo.Origen_Lote || '';
+//         let codigoProductoSFinal = lineaData.CodigoProductoS || '';
+
+//         // --- 🟢 LÓGICA CORREGIDA PARA LA TAREA (IGUAL QUE VB.NET) ---
+//         let tareaAGuardar = '';
+//         tareaAGuardar = opInfo.Tarea;
+
+//         if (sobrante === 1) { 
+//             // ✅ SOBRANTE: El ID y código son los mismos que el entrante
+//             loteIDSFinal = opInfo.Origen_Lote_ID;
+//             if (!codigoProductoSFinal) {
+//                 codigoProductoSFinal = opInfo.Codigo_Producto;
+//             }
+//             console.log("✅ SOBRANTE - codigoProductoSFinal:", codigoProductoSFinal);
+//         } else if (sobrante === 2) { 
+//             // SCRAP
+//             if (lineaData?.bScrapNoSeriado) {
+//                 loteIDSFinal = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
+//                 destinoLoteFinal = 'Scrap No Seriado';
+//             } else {
+//                 if (!codigoProductoSFinal) {
+//                      const [mermaInfo] = await transaction.raw("EXEC SP_TraerCodigoProductoMerma @Operacion_id=?", [operacionId]);
+//                      if (mermaInfo) codigoProductoSFinal = mermaInfo.Codigo_ProductoS;
+//                 }
+//                 await transaction.raw("EXEC SP_EditarLotesDisponiblesScrap @Lote_IDS=?, @Usado=1", [loteIDSFinal]);
+//             }
+//         } else {
+//             // CORTE NORMAL
+//             if (!codigoProductoSFinal && loteIDSFinal) {
+//                 const [corteInfo] = await transaction.raw(
+//                     "SELECT TOP 1 Codigo_ProductoS FROM OperacionesCalipso WHERE Lote_IDS = ?", [loteIDSFinal]
+//                 );
+//                 if (corteInfo) {
+//                     codigoProductoSFinal = corteInfo.Codigo_ProductoS;
+//                     console.log("✅ CORTE NORMAL - codigoProductoSFinal:", codigoProductoSFinal);
+//                 }
+//             }
+//         }
+
+//         // 🟢 3. VERIFICACIÓN DE EXISTENCIA
+//         const checkExistencia = await transaction.raw(
+//             "SELECT ID FROM Registracion WHERE Operacion_ID = ? AND Lote_IDS = ? AND Sobrante = ?",
+//             [operacionId, loteIDSFinal || '00000000-0000-0000-0000-000000000000', sobrante]
+//         );
+        
+//         const registroExistente = checkExistencia.length > 0 ? checkExistencia[0] : null;
+//         const existeRegistro = !!registroExistente;
+
+//         // 4. LIMPIEZA DE ATADOS PREVIOS
+//         if (existeRegistro) {
+//             await transaction.raw(
+//                 "EXEC SP_EliminarAtadosRegistrados @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?",
+//                 [operacionId, loteIDSFinal, sobrante]
+//             );
+//         }
+
+//         // 5. INSERTAR ATADOS
+//         for (const a of atados) {
+//             await transaction.raw(
+//                 "EXEC SP_InsertarAtados @Operacion_ID=?, @Destino_Lote=?, @Atado=?, @Rollos=?, @Lote_IDS=?, @Sobrante=?, @Peso=?, @Calidad=?, @Etiqueta=?",
+//                 [
+//                     operacionId,
+//                     destinoLoteFinal || '',
+//                     a.atado || 0,
+//                     a.rollos || 0,
+//                     loteIDSFinal || null,
+//                     sobrante || 0,
+//                     parseFloat(a.peso) || 0,
+//                     a.esCalidad ? 1 : 0,
+//                     a.nroEtiqueta || 0
+//                 ]
+//             );
+//         }
+
+//         // 6. TOTALES
+//         const sobreOrdenTotal = atados.filter(a => !a.esCalidad).reduce((sum, a) => sum + parseFloat(a.peso), 0);
+//         const calidadTotal = atados.filter(a => a.esCalidad).reduce((sum, a) => sum + parseFloat(a.peso), 0);
+//         const totalAtados = atados.length;
+//         const totalRollos = atados.reduce((sum, a) => sum + (parseInt(a.rollos) || 0), 0);
+
+//         // 7. REGISTRACION FINAL
+//         if (existeRegistro) {
+//             // ✅ ACTUALIZAR registro existente
+//             await transaction.raw(
+//                 `UPDATE Registracion 
+//                  SET Kilos_Sobreorden = ?, Kilos_Calidad = ?, Atados = ?, Rollos = ?,
+//                      Codigo_ProductoS = ISNULL(NULLIF(?, ''), Codigo_ProductoS),
+//                      Destino_Lote = ?, Tarea = ?, Usuario = ?, FechaReg = ?
+//                  WHERE ID = ?`,
+//                 [
+//                     sobreOrdenTotal,
+//                     calidadTotal,
+//                     totalAtados,
+//                     totalRollos,
+//                     codigoProductoSFinal,
+//                     destinoLoteFinal,
+//                     tareaAGuardar,
+//                     usuario || 'admin',
+//                     fechaArgentina,
+//                     registroExistente.ID
+//                 ]
+//             );
+//         } else {
+//             // ✅ INSERTAR nuevo registro
+//             const flagAnulada = (destinoLoteFinal === 'Scrap No Seriado') ? 'Z' : 'N';
+            
+//             const paramsInsert = [
+//                 operacionId,
+//                 tareaAGuardar,  // ✅ AHORA USA EL VALOR CORRECTO DE LA BD
+//                 opInfo.Maquina || '',
+//                 opInfo.NroBatch || '',
+//                 opInfo.Operacion_C_Desc || opInfo.Operacion_Cuchillas || '',
+//                 opInfo.Codigo_Producto || '',
+//                 codigoProductoSFinal || '',
+//                 opInfo.Origen_Lote_ID || null,
+//                 lineaData.Programados || 0,
+//                 sobreOrdenTotal,
+//                 calidadTotal,
+//                 '1', 
+//                 sobrante,
+//                 loteIDSFinal,
+//                 '0', 
+//                 destinoLoteFinal,
+//                 opInfo.Nro_Matching || '',
+//                 '0', 
+//                 totalAtados,
+//                 totalRollos,
+//                 usuario || 'admin',
+//                 fechaArgentina,
+//                 flagAnulada 
+//             ];
+
+//             console.log("📋 paramsInsert - Tarea a guardar:", tareaAGuardar);
+//             await transaction.raw("EXEC SP_InsertarRegistracion ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?", paramsInsert);
+//         }
+
+//         await transaction.commit();
+//         res.status(200).json({ success: true, message: existeRegistro ? 'Registro actualizado correctamente' : 'Registro creado correctamente' });
+//     } catch (error) {
+//         if (transaction) await transaction.rollback();
+//         console.error("❌ Error en registrarPesaje:", error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
 const registrarPesaje = async (req, res) => {
     const { operacionId, loteIds, sobrante, atados, usuario } = req.body;
     const lineaData = req.body.lineaData || {};
@@ -1054,7 +1229,6 @@ const registrarPesaje = async (req, res) => {
 
         console.log("opInfo.......................:", opInfo);
         
-
         if (!opInfo) throw new Error("No se encontró información de la operación principal.");
 
         // 2. DETERMINAR IDs Y DESTINOS
@@ -1107,28 +1281,45 @@ const registrarPesaje = async (req, res) => {
         const registroExistente = checkExistencia.length > 0 ? checkExistencia[0] : null;
         const existeRegistro = !!registroExistente;
 
-        // 4. LIMPIEZA DE ATADOS PREVIOS
+        // 4. LIMPIEZA DE ATADOS PREVIOS (SOLO SI EXISTE REGISTRO)
         if (existeRegistro) {
+            console.log("🗑️  Eliminando atados existentes...");
             await transaction.raw(
                 "EXEC SP_EliminarAtadosRegistrados @Operacion_ID=?, @Lote_IDS=?, @Sobrante=?",
                 [operacionId, loteIDSFinal, sobrante]
             );
         }
 
-        // 5. INSERTAR ATADOS
+        // 5. INSERTAR ATADOS - ✅ CORRECCIÓN: Asegurar tipos de datos correctos
+        console.log("📝 Insertando atados...");
         for (const a of atados) {
+            // ✅ CONVERSIÓN EXPLÍCITA A ENTEROS PARA EVITAR ERRORES DE TIPO
+            const atadoNum = parseInt(a.atado) || 0;
+            const rollosNum = parseInt(a.rollos) || 0;
+            const pesoNum = parseFloat(a.peso) || 0;
+            const calidadNum = a.esCalidad ? 1 : 0;
+            const etiquetaNum = parseInt(a.nroEtiqueta) || 0;
+
+            console.log("📦 Atado:", { 
+                atado: atadoNum, 
+                rollos: rollosNum, 
+                peso: pesoNum, 
+                calidad: calidadNum, 
+                etiqueta: etiquetaNum 
+            });
+
             await transaction.raw(
                 "EXEC SP_InsertarAtados @Operacion_ID=?, @Destino_Lote=?, @Atado=?, @Rollos=?, @Lote_IDS=?, @Sobrante=?, @Peso=?, @Calidad=?, @Etiqueta=?",
                 [
                     operacionId,
                     destinoLoteFinal || '',
-                    a.atado || 0,
-                    a.rollos || 0,
+                    atadoNum,           // ✅ ENTERO
+                    rollosNum,          // ✅ ENTERO
                     loteIDSFinal || null,
                     sobrante || 0,
-                    parseFloat(a.peso) || 0,
-                    a.esCalidad ? 1 : 0,
-                    a.nroEtiqueta || 0
+                    pesoNum,            // ✅ DECIMAL
+                    calidadNum,         // ✅ ENTERO (0 o 1)
+                    etiquetaNum         // ✅ ENTERO
                 ]
             );
         }
@@ -1139,14 +1330,17 @@ const registrarPesaje = async (req, res) => {
         const totalAtados = atados.length;
         const totalRollos = atados.reduce((sum, a) => sum + (parseInt(a.rollos) || 0), 0);
 
+        console.log("📊 Totales:", { sobreOrdenTotal, calidadTotal, totalAtados, totalRollos });
+
         // 7. REGISTRACION FINAL
         if (existeRegistro) {
             // ✅ ACTUALIZAR registro existente
+            console.log("✏️  Actualizando registro existente ID:", registroExistente.ID);
             await transaction.raw(
                 `UPDATE Registracion 
                  SET Kilos_Sobreorden = ?, Kilos_Calidad = ?, Atados = ?, Rollos = ?,
                      Codigo_ProductoS = ISNULL(NULLIF(?, ''), Codigo_ProductoS),
-                     Destino_Lote = ?, Tarea = ?, Usuario = ?, FechaReg = ?
+                     Destino_Lote = ?, Tarea = ?, RetornaStock = ?, Usuario = ?, FechaReg = ?
                  WHERE ID = ?`,
                 [
                     sobreOrdenTotal,
@@ -1156,6 +1350,7 @@ const registrarPesaje = async (req, res) => {
                     codigoProductoSFinal,
                     destinoLoteFinal,
                     tareaAGuardar,
+                    (destinoLoteFinal === 'Scrap No Seriado') ? 'Z' : 'N',  // ✅ RetornaStock
                     usuario || 'admin',
                     fechaArgentina,
                     registroExistente.ID
@@ -1163,7 +1358,7 @@ const registrarPesaje = async (req, res) => {
             );
         } else {
             // ✅ INSERTAR nuevo registro
-            const flagAnulada = (tareaAGuardar === 'Scrap No Seriado') ? 'Z' : 'N';
+            const flagAnulada = (destinoLoteFinal === 'Scrap No Seriado') ? 'Z' : 'N';
             
             const paramsInsert = [
                 operacionId,
@@ -1191,15 +1386,20 @@ const registrarPesaje = async (req, res) => {
                 flagAnulada 
             ];
 
-            console.log("📋 paramsInsert - Tarea a guardar:", tareaAGuardar);
+            console.log("📋 paramsInsert - Tarea:", tareaAGuardar, "| RetornaStock:", flagAnulada);
             await transaction.raw("EXEC SP_InsertarRegistracion ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?", paramsInsert);
         }
 
         await transaction.commit();
-        res.status(200).json({ success: true, message: existeRegistro ? 'Registro actualizado correctamente' : 'Registro creado correctamente' });
+        console.log("✅ Registro exitoso");
+        res.status(200).json({ 
+            success: true, 
+            message: existeRegistro ? 'Registro actualizado correctamente' : 'Registro creado correctamente' 
+        });
     } catch (error) {
         if (transaction) await transaction.rollback();
         console.error("❌ Error en registrarPesaje:", error);
+        console.error("❌ Error details:", error.message);
         res.status(500).json({ error: error.message });
     }
 };
