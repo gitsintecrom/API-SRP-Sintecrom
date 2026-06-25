@@ -19,7 +19,12 @@ const {
     registrarPesaje,
     resetPesaje,
     obtenerYActualizarEtiqueta,
+    obtenerPaquetesEmbalaje,
+    resetearPaquetesEmbalaje,
+    registrarPaquetesEmbalaje,  // ✅ AGREGAR
     obtenerUltimaEtiqueta,
+    obtenerLoteDisponible,
+    marcarLoteUsado,  
     validateSupervisor,
     getInspeccionReviewData,
     updateInspeccionSupervisor,
@@ -60,10 +65,17 @@ router.get('/pesaje/codigo-merma/:operacionId', getCodigoProductoMerma); // Usam
 router.post("/pesaje/obtener-atados", obtenerAtadosRegistrados);
 router.post('/pesaje/obtener-registro-scrap-no-seriado', obtenerRegistroScrapNoSeriado);
 router.post("/pesaje/obtener-y-actualizar-etiqueta", obtenerYActualizarEtiqueta);
+router.post("/pesaje/obtener-paquetes-emabalaje", obtenerPaquetesEmbalaje);
+router.post("/pesaje/resetear-paquetes-emabalaje", resetearPaquetesEmbalaje);
+router.post("/pesaje/registrar-paquetes-emabalaje", registrarPaquetesEmbalaje);
 router.get("/pesaje/obtener-ultima-etiqueta", obtenerUltimaEtiqueta);
 router.post("/pesaje/registrar", registrarPesaje);
 router.post("/pesaje/reset", resetPesaje);
 router.post("/pesaje/obtenerAtadosSobrantes", obtenerAtadosSobrante);
+
+// ✅ NUEVA RUTA para obtener lote disponible
+router.post("/pesaje/obtener-lote-disponible", obtenerLoteDisponible);
+router.post("/pesaje/marcar-lote-usado", marcarLoteUsado);
 
 // Agregar estas rutas
 router.post('/validate-supervisor', validateSupervisor);

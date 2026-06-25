@@ -520,14 +520,16 @@ const getDetalleOperacion = async (req, res) => {
 };
 
 // ============================================================================
-// getDetalleOperacionEmbalaje - VERSIÓN CORREGIDA (RESPETANDO STORED PROCEDURES)
+// getDetalleOperacionEmbalaje - VERSIÓN CORREGIDA
 // ============================================================================
-
 const getDetalleOperacionEmbalaje = async (req, res) => {
     const { operacionId } = req.params;
-    const SCRAP_ITEM_ID = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
     
     try {
+        console.log('🔍 getDetalleOperacionEmbalaje - CONSULTA DIRECTA');
+        console.log('   operacionId:', operacionId);
+        
+        // ✅ PASO 1: Obtener líneas del pedido
         const cortes = await dbRegistracionNET.raw(
             "EXEC SP_TraerOperacionesARegistrarEmbalaje @Operacion_ID=?",
             [operacionId]
@@ -539,30 +541,47 @@ const getDetalleOperacionEmbalaje = async (req, res) => {
         let lineasFinales = [];
         let sumTotalBruto = 0;
 
+        // ✅ PASO 2: Para cada línea, consultar DIRECTAMENTE RegistracionUltimaOperacion
         for (const corte of cortes) {
+            console.log('\n📦 Procesando línea:', corte.NumeroItem);
+            
+            // Consultar DIRECTAMENTE sin SP
             const regNormalArray = await dbRegistracionNET.raw(
-                "EXEC SP_TraerOperacionesRegistradasPlancha @Operacion_ID=?, @ItemPedido_ID=?, @Sobrante=?",
-                [operacionId, corte.ItemPedido_ID, 0]
+                `SELECT * FROM RegistracionUltimaOperacion 
+                 WHERE Operacion_ID = ? AND Sobrante = 0
+                 ORDER BY ID DESC`,
+                [operacionId]
             );
             
+            console.log('   Registros encontrados:', regNormalArray.length);
+            
             let sumSO = 0, sumCalidad = 0, sumBruto = 0;
-            regNormalArray.forEach(r => {
-                sumSO += parseFloat(r.Kilos_Sobreorden || 0);
-                sumCalidad += parseFloat(r.Kilos_Calidad || 0);
-                sumBruto += parseFloat(r.Kilos_Bruto || 0);
-            });
+            let totalAtados = 0;
+            let totalRollos = 0;
+            
+            // ✅ PASO 3: Consultar DIRECTAMENTE AtadosPlancha
+            const atadosResult = await dbRegistracionNET.raw(
+                `SELECT * FROM AtadosPlancha 
+                 WHERE Operacion_ID = ? AND Sobrante = 0
+                 ORDER BY Atado`,
+                [operacionId]
+            );
+            
+            console.log('   Atados encontrados:', atadosResult.length);
+            
+            // Calcular totales
+            for (const reg of regNormalArray) {
+                sumSO += parseFloat(reg.Kilos_Sobreorden || 0);
+                sumCalidad += parseFloat(reg.Kilos_Calidad || 0);
+                sumBruto += parseFloat(reg.Kilos_Bruto || 0);
+            }
+            
+            totalAtados = atadosResult.length;
+            totalRollos = atadosResult.reduce((sum, a) => sum + parseInt(a.Rollos || 0), 0);
+            
             sumTotalBruto += sumBruto;
 
-            const [totNormal] = await dbRegistracionNET.raw(
-                "EXEC SP_TotalizarAtadosRegistradosPlancha @Operacion_ID=?, @ItemPedido_ID=?, @Sobrante=?",
-                [operacionId, corte.ItemPedido_ID, 0]
-            );
-
-            const [totScrap] = await dbRegistracionNET.raw(
-                "EXEC SP_TotalizarAtadosRegistradosPlancha @Operacion_ID=?, @ItemPedido_ID=?, @Sobrante=?",
-                [operacionId, SCRAP_ITEM_ID, 2]
-            );
-
+            // ✅ PASO 4: Crear línea con totales correctos
             lineasFinales.push({
                 NumeroPedido: corte.NumeroPedido,
                 NumeroItem: corte.NumeroItem,
@@ -572,16 +591,26 @@ const getDetalleOperacionEmbalaje = async (req, res) => {
                 Programados: parseFloat(corte.KilosEmbalaje || 0),
                 SobreOrden: sumSO,
                 Calidad: sumCalidad,
-                TotAtados: parseInt(totNormal?.TotalAtados || 0),
-                TotRollos: parseInt(totNormal?.TotalRollos || 0),
+                TotAtados: totalAtados,
+                TotRollos: totalRollos,
                 Bruto: sumBruto,
                 ScrapKgs: 0, 
-                ScrapAtados: parseInt(totScrap?.TotalAtados || 0),
-                ScrapRollos: parseInt(totScrap?.TotalRollos || 0)
+                ScrapAtados: 0,
+                ScrapRollos: 0,
+                
+                // Campos para el modal
+                Lote_IDS: corte.Lote_IDS || primerCorte.Origen_Lote_ID || '',
+                Origen_Lote_ID: primerCorte.Origen_Lote_ID || '',
+                Operacion_ID: corte.Operacion_ID || operacionId,
+                SerieLote: primerCorte.Origen_Lote || '',
+                PedidoID: corte.ItemPedido_ID || primerCorte.Origen_Lote_ID || ''
             });
+            
+            console.log('   TotAtados:', totalAtados);
+            console.log('   TotRollos:', totalRollos);
         }
 
-        // --- LÓGICA DE NOTAS CALIPSO ---
+        // ... resto del código (notas Calipso, ficha técnica, response) ...
         let tieneNotasCalipso = false;
         try {
             const [notasMatchingRes, notasVariasRes, motivoBloqueoRes] = await Promise.all([
@@ -613,12 +642,10 @@ const getDetalleOperacionEmbalaje = async (req, res) => {
                 Batch: primerCorte.NroBatch,
                 Stock: primerCorte.Stock || 0,
                 KgsProgramados: lineasFinales.reduce((sum, l) => sum + l.Programados, 0),
-                // ✅ AGREGAR: Código del Pedido (se muestra arriba en el cuadro gris)
                 CodProdPedido: primerCorte.CodProdPedido || '', 
-                // ✅ MANTENER: Código del Producto Final/Entrante (se muestra en el cuadro blanco)
                 CodProdFinal: primerCorte.Codigo_Producto,
-                CantAtados: primerCorte.CantidadPaquetes || 1,
-                CantRollos: primerCorte.CantidadRollos || 1,
+                CantAtados: lineasFinales.reduce((sum, l) => sum + l.TotAtados, 0),
+                CantRollos: lineasFinales.reduce((sum, l) => sum + l.TotRollos, 0),
                 Familia: ficha?.Familia || 'Hojalata',
                 Aleacion: ficha?.Aleacion || 'NA',
                 Temple: ficha?.Temple || 'T3',
@@ -642,8 +669,17 @@ const getDetalleOperacionEmbalaje = async (req, res) => {
             }
         };
 
+        console.log('\n✅ Response generado:');
+        console.log('   CantAtados:', response.header.CantAtados);
+        console.log('   CantRollos:', response.header.CantRollos);
+        console.log('   Total SO:', totalSO);
+        console.log('   Total Calidad:', totalCal);
+
         res.json(response);
-    } catch (error) { res.status(500).json({ error: error.message }); }
+    } catch (error) { 
+        console.error('❌ Error en getDetalleOperacionEmbalaje:', error);
+        res.status(500).json({ error: error.message }); 
+    }
 };
 
 const getCalculo_cuchillas = async (req, res) => {
@@ -2215,6 +2251,464 @@ const getOperacionesPlancha = async (req, res) => {
   }
 };
 
+// ============================================================================
+// FUNCIONES ESPECÍFICAS PARA EMBALAJE (PAQUETES)
+// ============================================================================
+const obtenerPaquetesEmbalaje = async (req, res) => {
+    const { operacionId, itemPedidoId, numeroItem, sobrante } = req.body;
+
+    console.log('🟢 obtenerPaquetesEmbalaje - DEBUG MODE');
+    console.log('   operacionId:', operacionId);
+    console.log('   itemPedidoId:', itemPedidoId);
+    console.log('   numeroItem:', numeroItem);
+    console.log('   sobrante:', sobrante);
+
+    try {
+        // ✅ PASO 1: Verificar qué hay en AtadosPlancha directamente
+        console.log('\n📌 CONSULTA DIRECTA A AtadosPlancha:');
+        const atadosDirectos = await dbRegistracionNET.raw(
+            `SELECT * FROM AtadosPlancha WHERE Operacion_ID = ?`,
+            [operacionId]
+        );
+        console.log('   Atados encontrados (sin filtros):', atadosDirectos.length);
+        if (atadosDirectos.length > 0) {
+            console.log('   Primer atado:', atadosDirectos[0]);
+        }
+
+        // ✅ PASO 2: Ejecutar SP_TraerOperacionesRegistradasPlancha
+        const registrosResult = await dbRegistracionNET.raw(
+            "EXEC SP_TraerOperacionesRegistradasPlancha @Operacion_ID=?, @ItemPedido_ID=?, @Sobrante=?",
+            [operacionId, String(itemPedidoId), sobrante || 0]
+        );
+
+        console.log('\n📌 Registros de Registracion:', registrosResult.length);
+
+        if (!registrosResult || registrosResult.length === 0) {
+            return res.status(200).json([]);
+        }
+
+        const paquetesFinales = [];
+
+        // ✅ PASO 3: Por CADA registro de Registracion
+        for (const reg of registrosResult) {
+            console.log('\n📦 Procesando registro:');
+            console.log('   Kilos_Sobreorden:', reg.Kilos_Sobreorden);
+            console.log('   Kilos_Bruto:', reg.Kilos_Bruto);
+            console.log('   ID_LotePlancha:', reg.ID_LotePlancha);
+            console.log('   Atados:', reg.Atados);
+            
+            // Calcular Tara igual que VB
+            const kilosSobreOrden = parseFloat(reg.Kilos_Sobreorden || 0);
+            const kilosCalidad = parseFloat(reg.Kilos_Calidad || 0);
+            const kilosBruto = parseFloat(reg.Kilos_Bruto || 0);
+            const tara = kilosBruto > 0 ? (kilosBruto - kilosSobreOrden - kilosCalidad) : 0;
+            
+            // ✅ PASO 4: Consultar AtadosPlancha CON FILTROS
+            console.log('\n📌 Consultando AtadosPlancha con filtros:');
+            console.log('   Operacion_ID:', operacionId);
+            console.log('   Sobrante:', sobrante || 0);
+            console.log('   ID_LotePlancha:', reg.ID_LotePlancha);
+            
+            const atadosResult = await dbRegistracionNET.raw(
+                `SELECT Atado, Rollos, Peso, Calidad, Etiqueta 
+                 FROM AtadosPlancha 
+                 WHERE Operacion_ID = ? 
+                 AND Sobrante = ?
+                 AND ID_LotePlancha = ?
+                 ORDER BY Atado`,
+                [operacionId, sobrante || 0, reg.ID_LotePlancha]
+            );
+
+            console.log('   Atados encontrados:', atadosResult.length);
+            if (atadosResult.length > 0) {
+                console.log('   Primer atado:', atadosResult[0]);
+            }
+
+            // ✅ PASO 5: Agregar UNA fila por CADA atado
+            if (atadosResult && atadosResult.length > 0) {
+                for (const atado of atadosResult) {
+                    paquetesFinales.push({
+                        NroPaquete: atado.Atado || 0,
+                        SerieLote: reg.LotePlanchaDesc?.substring(0, 11) || '',
+                        ID_LotePlancha: reg.ID_LotePlancha || '',
+                        KilosSobreOrden: kilosSobreOrden,
+                        KilosBruto: kilosBruto,
+                        Tara: tara,
+                        Hojas: atado.Rollos || 1,
+                        NroEtiqueta: atado.Etiqueta || 0,
+                        Calidad: atado.Calidad === 1 ? 'Aceptada' : ' ',
+                        Registrada: 'SI',
+                        FechaReg: reg.FechaReg
+                    });
+                }
+            } else {
+                // Si no hay atados, crear uno con los datos de Registracion
+                console.log('   ⚠️ No hay atados, creando uno con datos de Registracion');
+                paquetesFinales.push({
+                    NroPaquete: reg.Atados || 0,
+                    SerieLote: reg.LotePlanchaDesc?.substring(0, 11) || '',
+                    ID_LotePlancha: reg.ID_LotePlancha || '',
+                    KilosSobreOrden: kilosSobreOrden,
+                    KilosBruto: kilosBruto,
+                    Tara: tara,
+                    Hojas: reg.Rollos || 1,
+                    NroEtiqueta: 0,
+                    Calidad: ' ',
+                    Registrada: 'SI',
+                    FechaReg: reg.FechaReg
+                });
+            }
+        }
+
+        console.log('\n' + '='.repeat(80));
+        console.log('Total paquetes:', paquetesFinales.length);
+        if (paquetesFinales.length > 0) {
+            console.log('Primer paquete:', paquetesFinales[0]);
+        }
+        console.log('='.repeat(80));
+
+        res.json(paquetesFinales);
+
+    } catch (error) {
+        console.error('❌ Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+const resetearPaquetesEmbalaje = async (req, res) => {
+    const { operacionId, itemPedidoId, sobrante, idLotePlancha, lineaData } = req.body;
+
+    console.log('🟢 resetearPaquetesEmbalaje llamado:');
+    console.log('   operacionId:', operacionId);
+    console.log('   itemPedidoId:', itemPedidoId);
+
+    try {
+        const transaction = await dbRegistracionNET.transaction();
+
+        try {
+            // ✅ PASO 1: Obtener TODOS los ID_LotePlancha de esta operación
+            console.log('\n📌 Obteniendo registros existentes...');
+            const registros = await transaction.raw(
+                `SELECT DISTINCT ID_LotePlancha FROM RegistracionUltimaOperacion 
+                 WHERE Operacion_ID = ? AND Sobrante = ?`,
+                [operacionId, sobrante || 0]
+            );
+
+            console.log('   Registros encontrados:', registros.length);
+
+            // ✅ PASO 2: Eliminar atados de cada LotePlancha
+            for (const reg of registros) {
+                const lotePlancha = reg.ID_LotePlancha;
+                console.log('\n   🗑️ Eliminando atados para ID_LotePlancha:', lotePlancha);
+                
+                await transaction.raw(
+                    `DELETE FROM AtadosPlancha 
+                     WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
+                    [operacionId, sobrante || 0, lotePlancha]
+                );
+            }
+
+            // ✅ PASO 3: Eliminar TODOS los registros de la operación
+            console.log('\n   🗑️ Eliminando registros de RegistracionUltimaOperacion...');
+            await transaction.raw(
+                `DELETE FROM RegistracionUltimaOperacion 
+                 WHERE Operacion_ID = ? AND Sobrante = ?`,
+                [operacionId, sobrante || 0]
+            );
+
+            await transaction.commit();
+
+            console.log('\n✅ Paquetes reseteados correctamente');
+            res.status(200).json({ message: 'Paquetes reseteados correctamente' });
+
+        } catch (error) {
+            await transaction.rollback();
+            console.error('❌ Error en transacción:', error);
+            throw error;
+        }
+
+    } catch (error) {
+        console.error("❌ Error en resetearPaquetesEmbalaje:", error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+const registrarPaquetesEmbalaje = async (req, res) => {
+    const { operacionId, itemPedidoId, loteIds, sobrante, atados, lineaData, usuario } = req.body;
+
+    console.log('🟢 registrarPaquetesEmbalaje - 2 REGISTROS SEPARADOS');
+    console.log('   operacionId:', operacionId);
+    console.log('   Cantidad de paquetes:', atados.length);
+
+    try {
+        const transaction = await dbRegistracionNET.transaction();
+
+        try {
+            // ✅ PASO 1: Obtener datos COMPLETOS de OperacionesCalipso
+            console.log('\n📌 Obteniendo datos de OperacionesCalipso...');
+            const [opInfo] = await transaction.raw(
+                `SELECT Maquina, NroBatch, Codigo_Producto, Origen_Lote, Origen_Lote_ID, 
+                        Operacion_Cuchillas, Nro_Matching, Tarea, KilosProgramadosEntrantes,
+                        ItemPedido_ID
+                 FROM OperacionesCalipso 
+                 WHERE Operacion_ID = ?`, 
+                [operacionId]
+            );
+
+            if (!opInfo) {
+                throw new Error("No se encontró información de la operación en OperacionesCalipso");
+            }
+
+            // ✅ PASO 2: AGRUPAR paquetes por su ID_LotePlancha
+            console.log('\n📦 Agrupando paquetes por ID_LotePlancha...');
+            const paquetesPorLote = {};
+            
+            for (const paquete of atados) {
+                const idLotePlancha = paquete.idLotePlancha || opInfo.Origen_Lote_ID || loteIds;
+                const serieLote = paquete.serieLote || opInfo.Origen_Lote || lineaData?.SerieLote || '';
+                
+                if (!paquetesPorLote[idLotePlancha]) {
+                    paquetesPorLote[idLotePlancha] = {
+                        idLotePlancha: idLotePlancha,
+                        serieLote: serieLote,
+                        paquetes: [],
+                        totalSobreOrden: 0,
+                        totalCalidad: 0,
+                        totalBruto: 0,
+                        totalAtados: 0,
+                        totalRollos: 0
+                    };
+                }
+                
+                const peso = parseFloat(paquete.peso) || 0;
+                const kilosBruto = parseFloat(paquete.kilosBruto) || peso;
+                
+                paquetesPorLote[idLotePlancha].paquetes.push(paquete);
+                
+                if (!paquete.esCalidad) {
+                    paquetesPorLote[idLotePlancha].totalSobreOrden += peso;
+                } else {
+                    paquetesPorLote[idLotePlancha].totalCalidad += peso;
+                }
+                paquetesPorLote[idLotePlancha].totalBruto += kilosBruto;
+                paquetesPorLote[idLotePlancha].totalAtados += 1;
+                paquetesPorLote[idLotePlancha].totalRollos += parseInt(paquete.rollos) || 0;
+            }
+
+            console.log('   Lotes encontrados:', Object.keys(paquetesPorLote).length);
+            Object.entries(paquetesPorLote).forEach(([id, datos]) => {
+                console.log(`   - ${datos.serieLote}: ${datos.paquetes.length} paquetes, ${datos.totalSobreOrden} Kg`);
+            });
+            
+            // ✅ PASO 3: ELIMINAR solo los registros de los lotes que estamos procesando
+            console.log('\n   🗑️ ELIMINANDO solo los lotes a procesar...');
+            for (const idLotePlancha of Object.keys(paquetesPorLote)) {
+                await transaction.raw(
+                    `DELETE FROM AtadosPlancha WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
+                    [operacionId, sobrante || 0, idLotePlancha]
+                );
+                
+                await transaction.raw(
+                    `DELETE FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
+                    [operacionId, sobrante || 0, idLotePlancha]
+                );
+            }
+
+            // ✅ PASO 4: Insertar un registro POR CADA lote diferente
+            for (const [idLotePlancha, datosLote] of Object.entries(paquetesPorLote)) {
+                console.log('\n   ➕ Procesando lote:', idLotePlancha);
+                console.log('      Serie/Lote:', datosLote.serieLote);
+                console.log('      Paquetes:', datosLote.paquetes.length);
+
+                // Insertar atados
+                for (let i = 0; i < datosLote.paquetes.length; i++) {
+                    const paquete = datosLote.paquetes[i];
+                    
+                    await transaction.raw(
+                        `EXEC SP_InsertarAtadosPlancha 
+                         @Operacion_ID=?, @NumeroItem=?, @Atado=?, @Rollos=?,
+                         @Sobrante=?, @Peso=?, @Calidad=?, @ID_LotePlancha=?, @Etiqueta=?`,
+                        [
+                            operacionId,
+                            String(parseInt(lineaData?.NumeroItem) || 1),
+                            parseInt(paquete.atado) || (i + 1),
+                            parseInt(paquete.rollos) || 0,
+                            sobrante || 0,
+                            paquete.peso,
+                            paquete.esCalidad ? 1 : 0,
+                            idLotePlancha,
+                            parseInt(paquete.nroEtiqueta) || 0
+                        ]
+                    );
+                }
+
+                // ✅ INSERTAR registro - ✅ USAR PedidoID como ItemPedido_ID
+                await transaction.raw(
+                    `EXEC SP_InsertarRegistracionPlancha 
+                     @Operacion_ID=?, @Tarea=?, @Maquina=?, @NroBatch=?, @Cuchillas=?,
+                     @CodProducto=?, @CodProductoS=?, @Lote_ID=?, @KilosProgramados=?,
+                     @KilosSobreOrden=?, @KilosCalidad=?, @Estado=?, @Sobrante=?,
+                     @ACalidad=?, @LotePlanchaDesc=?, @Nro_Matching=?, @ItemPedido_ID=?,
+                     @NumeroItem=?, @Kilos_Bruto=?, @ACalidadSO=?, @Atados=?, @Rollos=?,
+                     @ID_LotePlancha=?, @CodSerie=?, @CodLote=?, @Usuario=?, @FechaReg=?,
+                     @RetornaStock=?`,
+                    [
+                        operacionId,
+                        opInfo.Tarea || 'Embalaje',
+                        opInfo.Maquina || '',
+                        opInfo.NroBatch || '',
+                        opInfo.Operacion_Cuchillas || '',
+                        opInfo.Codigo_Producto || '',
+                        '',
+                        opInfo.Origen_Lote_ID || '',
+                        parseFloat(opInfo.KilosProgramadosEntrantes) || 0,
+                        datosLote.totalSobreOrden,
+                        datosLote.totalCalidad,
+                        '1',
+                        sobrante || 0,
+                        datosLote.totalCalidad > 0 ? '1' : '0',
+                        datosLote.serieLote,
+                        opInfo.Nro_Matching || '',
+                        lineaData?.PedidoID || opInfo.ItemPedido_ID,  // ✅ USAR PedidoID (como el VB)
+                        parseInt(lineaData?.NumeroItem) || 1,
+                        datosLote.totalBruto,
+                        '0',
+                        datosLote.totalAtados,
+                        datosLote.totalRollos,
+                        idLotePlancha,  // ✅ ID_LotePlancha de este lote
+                        '',
+                        '',
+                        usuario || 'sistema',
+                        new Date(),
+                        'N'
+                    ]
+                );
+            }
+
+            await transaction.commit();
+
+            console.log('\n✅ Registro completado - Total lotes:', Object.keys(paquetesPorLote).length);
+
+            const totalSO = Object.values(paquetesPorLote).reduce((sum, l) => sum + l.totalSobreOrden, 0);
+            const totalBruto = Object.values(paquetesPorLote).reduce((sum, l) => sum + l.totalBruto, 0);
+
+            res.status(200).json({ 
+                message: 'Paquetes registrados correctamente',
+                totales: {
+                    sobreOrden: totalSO,
+                    calidad: Object.values(paquetesPorLote).reduce((sum, l) => sum + l.totalCalidad, 0),
+                    bruto: totalBruto,
+                    atados: Object.values(paquetesPorLote).reduce((sum, l) => sum + l.totalAtados, 0),
+                    rollos: Object.values(paquetesPorLote).reduce((sum, l) => sum + l.totalRollos, 0)
+                }
+            });
+
+        } catch (error) {
+            await transaction.rollback();
+            console.error('❌ Error:', error);
+            throw error;
+        }
+
+    } catch (error) {
+        console.error('❌ Error:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+const obtenerLoteDisponible = async (req, res) => {
+    const { itemPedidoId, codSerie } = req.body;
+
+    console.log('🟢 obtenerLoteDisponible llamado:');
+    console.log('   itemPedidoId:', itemPedidoId);
+    console.log('   codSerie:', codSerie);
+
+    try {
+        // Intentar obtener lote disponible
+        const result = await dbRegistracionNET.raw(
+            `EXEC SP_TraerLotesDisponibles @ItemPedido_ID=?, @CodSerie=?`,
+            [itemPedidoId, codSerie]
+        );
+
+        if (result && result.length > 0) {
+            const lote = result[0];
+            console.log('   ✅ Lote encontrado:', lote.ID_LotePlancha);
+            
+            res.status(200).json({
+                idLotePlancha: lote.ID_LotePlancha,
+                lotePlanchaDesc: lote.LotePlanchaDesc
+            });
+        } else {
+            // ✅ NO hay lotes disponibles - generar uno nuevo automáticamente
+            console.log('   ⚠️ No hay lotes disponibles - Generando nuevo lote...');
+            
+            // Obtener próximo número de lote
+            const nextResult = await dbRegistracionNET.raw(
+                `SELECT TOP 1 LotePlanchaDesc 
+                 FROM LotesDisponibles 
+                 WHERE ItemPedido_ID = ? 
+                 ORDER BY ID_LotePlancha DESC`,
+                [itemPedidoId]
+            );
+            
+            let nuevoNumero = 1;
+            if (nextResult && nextResult.length > 0) {
+                // Extraer número del último lote (ej: "73769 - 015 - Embalaje" -> 16)
+                const ultimoLote = nextResult[0].LotePlanchaDesc;
+                const match = ultimoLote.match(/(\d+)\s*-\s*Embalaje/);
+                if (match) {
+                    nuevoNumero = parseInt(match[1]) + 1;
+                }
+            }
+            
+            const nuevoLoteDesc = `${codSerie} - ${String(nuevoNumero).padStart(3, '0')} - Embalaje`;
+            
+            // Generar nuevo GUID
+            const nuevoID = require('crypto').randomUUID();
+            
+            // Insertar nuevo lote en LotesDisponibles
+            await dbRegistracionNET.raw(
+                `INSERT INTO LotesDisponibles (ItemPedido_ID, ID_LotePlancha, LotePlanchaDesc, Usado)
+                 VALUES (?, ?, ?, 0)`,
+                [itemPedidoId, nuevoID, nuevoLoteDesc]
+            );
+            
+            console.log('   ✅ Nuevo lote generado:', nuevoID, nuevoLoteDesc);
+            
+            res.status(200).json({
+                idLotePlancha: nuevoID,
+                lotePlanchaDesc: nuevoLoteDesc
+            });
+        }
+
+    } catch (error) {
+        console.error('❌ Error en obtenerLoteDisponible:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// ✅ NUEVA FUNCIÓN: Marcar lote como usado
+const marcarLoteUsado = async (req, res) => {
+    const { itemPedidoId, idLotePlancha } = req.body;
+
+    console.log('🟢 marcarLoteUsado llamado:');
+    console.log('   itemPedidoId:', itemPedidoId);
+    console.log('   idLotePlancha:', idLotePlancha);
+
+    try {
+        await dbRegistracionNET.raw(
+            `EXEC SP_EditarLotesDisponibles @ItemPedido_ID=?, @ID_LotePlancha=?, @Usado=?`,
+            [itemPedidoId, idLotePlancha, 1]
+        );
+
+        console.log('   ✅ Lote marcado como usado');
+        res.status(200).json({ message: 'Lote marcado como usado' });
+
+    } catch (error) {
+        console.error('❌ Error en marcarLoteUsado:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
 
 module.exports = {
     getMaquinas,
@@ -2249,5 +2743,10 @@ module.exports = {
     getOperacionesSlitter,
     getOperacionesEmbalaje,
     getOperacionesPlancha,
-    getCodigoMerma
+    getCodigoMerma,
+    obtenerPaquetesEmbalaje,
+    resetearPaquetesEmbalaje,
+    registrarPaquetesEmbalaje,
+    obtenerLoteDisponible,
+    marcarLoteUsado,
 };
