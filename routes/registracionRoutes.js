@@ -12,6 +12,7 @@ const {
     getCalculo_cuchillas,
     getFichaTecnicaProductos,
     getFichaTecnicaDetalle,
+    getFichaEmbalajePdf,  // ✅ AGREGAR ESTA LÍNEA
     toggleSuspensionOperacion,
     getNotasCalipso,
     updateOperacion,
@@ -39,7 +40,18 @@ const {
     cerrarOperacion,
     getOperacionesSlitter,
     getOperacionesEmbalaje,
-    getOperacionesPlancha
+    getOperacionesPlancha,
+    verificarEstadoOperacion,
+    contarOperacionesARegistrarEmbalaje,
+    obtenerUltimaMultiOperacion,
+    procesarMultiOperacion,
+    getDefectosByFamilia,
+    getCalidadRegistrada,
+    guardarCalidad,
+
+    getCalidadRegistradaSlitter,
+    guardarCalidadSlitter,
+    getInfoOperacionCalidad,
 } = require("../controllers/registracionController");
 
 // Rutas existentes
@@ -49,12 +61,19 @@ router.get('/operaciones/slitter/:maquinaId', getOperacionesSlitter);
 router.get('/operaciones/embalaje/:maquinaId', getOperacionesEmbalaje);
 router.get('/operaciones/plancha/:maquinaId', getOperacionesPlancha);
 
+// Agregar estas rutas después de las existentes
+router.get('/operaciones/verificar-estado/:operacionId', verificarEstadoOperacion);
+router.get('/operaciones/contar-registrar-embalaje/:operacionId', contarOperacionesARegistrarEmbalaje);
+router.get('/operaciones/ultima-multioperacion', obtenerUltimaMultiOperacion);
+router.post('/operaciones/procesar-multioperacion', procesarMultiOperacion);
+
 router.post("/operaciones/procesar", procesarOperaciones);
 router.get("/detalle/:operacionId", getDetalleOperacion);
 router.get("/detalle-embalaje/:operacionId", getDetalleOperacionEmbalaje);
 router.get("/inspeccion/:operacionId/:loteId", getInspeccionData);
 router.get("/fichatecnica/:operacionId", getFichaTecnicaProductos);
 router.get("/fichatecnica/detalle/:codProd", getFichaTecnicaDetalle);
+router.get("/fichatecnica/pdf/:codProd", getFichaEmbalajePdf);  // ✅ AGREGAR AQUÍ
 router.post("/cuchillas/calcular", getCalculo_cuchillas);
 router.post("/operaciones/suspender/:operacionId", toggleSuspensionOperacion);
 router.get("/notas-calipso/:operacionId", getNotasCalipso); 
@@ -72,6 +91,14 @@ router.get("/pesaje/obtener-ultima-etiqueta", obtenerUltimaEtiqueta);
 router.post("/pesaje/registrar", registrarPesaje);
 router.post("/pesaje/reset", resetPesaje);
 router.post("/pesaje/obtenerAtadosSobrantes", obtenerAtadosSobrante);
+
+router.get('/calidad/defectos/:familia', getDefectosByFamilia);
+router.post('/calidad/obtener', getCalidadRegistrada);
+router.post('/calidad/guardar', guardarCalidad);
+
+router.get('/calidad/info-operacion/:operacionId', getInfoOperacionCalidad);
+router.post('/calidad/obtener-slitter', getCalidadRegistradaSlitter);
+router.post('/calidad/guardar-slitter', guardarCalidadSlitter);
 
 // ✅ NUEVA RUTA para obtener lote disponible
 router.post("/pesaje/obtener-lote-disponible", obtenerLoteDisponible);

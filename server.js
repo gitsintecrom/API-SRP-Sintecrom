@@ -65,7 +65,8 @@ const abastecimientoRoutes = require("./routes/abastecimientoRoutes");
 const secuenciamientoRutes = require('./routes/secuenciamientoRoutes');
 const rechazosRoutes = require('./routes/rechazosRoutes');
 const paradasRoutes = require('./routes/paradasRoutes');
-const registracionRoutes = require("./routes/registracionRoutes"); 
+const registracionRoutes = require("./routes/registracionRoutes");
+const calidadRoutes = require("./routes/calidadRoutes"); 
 
 // --- Definir Rutas PÚBLICAS (NO necesitan token) ---
 app.use("/api/auth", authRoutes);
@@ -81,6 +82,7 @@ app.use('/api/secuenciamiento', verifyToken, secuenciamientoRutes);
 app.use('/api/rechazos', verifyToken, rechazosRoutes);
 app.use('/api/paradas', verifyToken, paradasRoutes); 
 app.use("/api/registracion", verifyToken, registracionRoutes); 
+app.use("/api/calidad", calidadRoutes);
 // ===== FIN DE LA CORRECCIÓN CLAVE =====
 
 
