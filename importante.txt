@@ -1,0 +1,14 @@
+cd ~/BACK/API-SRP-Sintecrom
+
+# 1) Confirmá cuál es el archivo de entrada (por las dudas)
+pm2 describe server | grep -E "script path|exec cwd"
+
+# 2) Bajá el proceso actual
+pm2 delete server
+
+# 3) Levantalo con el nombre que querés (ajustá server.js si tu entry es otro, ej: index.js / app.js)
+pm2 start server.js --name "API-SRP-SINTECROM" --time
+
+# 4) Guardá el estado para que el nombre persista tras reinicios del servidor
+pm2 save
+
