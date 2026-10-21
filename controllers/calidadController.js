@@ -990,28 +990,140 @@ const getDetalleOperacionCalidad = async (req, res) => {
     }
 };
 
+// // ============================================================================
+// // OBTENER OPERACIONES PENDIENTES DE CALIDAD (GRILLA PRINCIPAL)
+// // ============================================================================
+// const getOperacionesPendientesCalidad = async (req, res) => {
+//     try {
+//         const { maquina, verDefectosSobreorden } = req.query;
+//         console.log('🔵 Params calidad:', { maquina, verDefectosSobreorden });
+        
+//         const result = await dbRegistracionNET.raw("EXEC dbo.SP_TraerOperacionesCalidad");
+//         console.log("Resultados Calidad...:", result);
+        
+//         let operaciones = Array.isArray(result) ? result : (result[0] || []);
+        
+//         if (maquina && maquina !== 'TODAS') {
+//             operaciones = operaciones.filter(op => op.Maquina === maquina);
+//         }
+        
+//         const operacionesFiltradas = [];
+//         const sobreordenVal = verDefectosSobreorden === 'true' ? 1 : 0;
+        
+//         for (const op of operaciones) {
+//             let spName = '';
+//             let params = [];
+            
+//             if (op.Maquina === 'PL1' || op.Maquina === 'PL2' || op.Maquina === 'PL3' || op.Maquina === 'EMB') {
+//                 spName = 'dbo.SP_TraerCalidadPlanchaT';
+//                 params = [op.Operacion_ID, op.ItemPedido_ID || op.Origen_Lote_ID || '', op.Sobrante || 0, sobreordenVal, op.Lote_IDS || op.ID_LotePlancha || ''];
+//             } else if (op.Maquina === 'HOR') {
+//                 spName = 'dbo.SP_TraerCalidadHorno';
+//                 params = [op.Operacion_ID, op.Lote_IDS || '', 0];
+//             } else {
+//                 spName = 'dbo.SP_TraerCalidad';
+//                 params = [op.Operacion_ID, op.Lote_IDS || '', op.Sobrante || 0, sobreordenVal];
+//             }
+            
+//             try {
+//                 const placeholders = params.map(() => '?').join(', ');
+//                 const spResult = await dbRegistracionNET.raw(`EXEC ${spName} ${placeholders}`, params);
+//                 const spData = Array.isArray(spResult) ? spResult : (spResult[0] || []);
+//                 const operacionConCalidad = spData.find(row => parseInt(row.Dictamen) === 0);
+                
+//                 if (operacionConCalidad) {
+//                     operacionesFiltradas.push({ ...op, ...operacionConCalidad, Sobreorden: sobreordenVal.toString() });
+//                 }
+//             } catch (spError) {
+//                 console.error(`Error ejecutando ${spName}:`, spError.message);
+//             }
+//         }
+        
+//         const operacionesFormateadas = operacionesFiltradas.map(op => {
+//             const maquina = op.Maquina;
+//             const sobrante = parseInt(op.Sobrante || 0);
+//             const esPlancha = (maquina === 'PL1' || maquina === 'PL2' || maquina === 'PL3' || maquina === 'EMB');
+            
+//             let kilosCalidad = parseFloat(op.Kilos_Calidad || 0);
+//             let kilosSobreOrden = parseFloat(op.Kilos_Sobreorden || op.Kilos_SobreOrden || 0);
+//             let kilosBrutos = parseFloat(op.KilosBrutos || 0);
+            
+//             if (esPlancha && sobrante === 0) {
+//                 kilosCalidad = kilosSobreOrden;
+//                 kilosSobreOrden = 0;
+//             }
+            
+//             if (!esPlancha) {
+//                 kilosBrutos = 0;
+//             }
+            
+//             return {
+//                 Maquina: op.Maquina,
+//                 Tarea: op.Tarea,
+//                 NroBatch: op.NroBatch,
+//                 Cuchillas: op.Operacion_Cuchillas,
+//                 SerieLote: op.Destino_Lote || op.SerieLote,
+//                 NroOperacion: op.Nro_Operacion || op.Nro_Matching || '0',
+//                 Kilos_Calidad: kilosCalidad,
+//                 Kilos_Sobreorden: kilosSobreOrden,
+//                 Kilos_Bruto: kilosBrutos,
+//                 Tipo: op.Leyenda || (op.Sobrante == 1 ? 'Sobrante' : op.Sobrante == 2 ? 'Scrap' : 'SO'),
+//                 Lote_IDS: op.Lote_IDS,
+//                 Sobrante: sobrante,
+//                 Operacion_ID: op.Operacion_ID,
+//                 Codigo_Producto: op.Codigo_Producto
+//             };
+//         });
+        
+//         res.status(200).json(operacionesFormateadas);
+//     } catch (error) {
+//         console.error("❌ Error en getOperacionesPendientesCalidad:", error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ============================================================================
 // OBTENER OPERACIONES PENDIENTES DE CALIDAD (GRILLA PRINCIPAL)
+// ✅ Incluye la columna Planta agregada al SP_TraerOperacionesCalidad (2026-10-21)
 // ============================================================================
 const getOperacionesPendientesCalidad = async (req, res) => {
     try {
         const { maquina, verDefectosSobreorden } = req.query;
         console.log('🔵 Params calidad:', { maquina, verDefectosSobreorden });
-        
+
         const result = await dbRegistracionNET.raw("EXEC dbo.SP_TraerOperacionesCalidad");
         let operaciones = Array.isArray(result) ? result : (result[0] || []);
-        
+
         if (maquina && maquina !== 'TODAS') {
             operaciones = operaciones.filter(op => op.Maquina === maquina);
         }
-        
+
         const operacionesFiltradas = [];
         const sobreordenVal = verDefectosSobreorden === 'true' ? 1 : 0;
-        
+
         for (const op of operaciones) {
             let spName = '';
             let params = [];
-            
+
             if (op.Maquina === 'PL1' || op.Maquina === 'PL2' || op.Maquina === 'PL3' || op.Maquina === 'EMB') {
                 spName = 'dbo.SP_TraerCalidadPlanchaT';
                 params = [op.Operacion_ID, op.ItemPedido_ID || op.Origen_Lote_ID || '', op.Sobrante || 0, sobreordenVal, op.Lote_IDS || op.ID_LotePlancha || ''];
@@ -1022,39 +1134,46 @@ const getOperacionesPendientesCalidad = async (req, res) => {
                 spName = 'dbo.SP_TraerCalidad';
                 params = [op.Operacion_ID, op.Lote_IDS || '', op.Sobrante || 0, sobreordenVal];
             }
-            
+
             try {
                 const placeholders = params.map(() => '?').join(', ');
                 const spResult = await dbRegistracionNET.raw(`EXEC ${spName} ${placeholders}`, params);
                 const spData = Array.isArray(spResult) ? spResult : (spResult[0] || []);
                 const operacionConCalidad = spData.find(row => parseInt(row.Dictamen) === 0);
-                
+
                 if (operacionConCalidad) {
-                    operacionesFiltradas.push({ ...op, ...operacionConCalidad, Sobreorden: sobreordenVal.toString() });
+                    // ✅✅ Planta se fija DESPUÉS del spread: los SPs de defectos no la traen
+                    //    y no queremos que un undefined la pise.
+                    operacionesFiltradas.push({
+                        ...op,
+                        ...operacionConCalidad,
+                        Planta: op.Planta || '',
+                        Sobreorden: sobreordenVal.toString()
+                    });
                 }
             } catch (spError) {
                 console.error(`Error ejecutando ${spName}:`, spError.message);
             }
         }
-        
+
         const operacionesFormateadas = operacionesFiltradas.map(op => {
             const maquina = op.Maquina;
             const sobrante = parseInt(op.Sobrante || 0);
             const esPlancha = (maquina === 'PL1' || maquina === 'PL2' || maquina === 'PL3' || maquina === 'EMB');
-            
+
             let kilosCalidad = parseFloat(op.Kilos_Calidad || 0);
             let kilosSobreOrden = parseFloat(op.Kilos_Sobreorden || op.Kilos_SobreOrden || 0);
             let kilosBrutos = parseFloat(op.KilosBrutos || 0);
-            
+
             if (esPlancha && sobrante === 0) {
                 kilosCalidad = kilosSobreOrden;
                 kilosSobreOrden = 0;
             }
-            
+
             if (!esPlancha) {
                 kilosBrutos = 0;
             }
-            
+
             return {
                 Maquina: op.Maquina,
                 Tarea: op.Tarea,
@@ -1069,16 +1188,19 @@ const getOperacionesPendientesCalidad = async (req, res) => {
                 Lote_IDS: op.Lote_IDS,
                 Sobrante: sobrante,
                 Operacion_ID: op.Operacion_ID,
-                Codigo_Producto: op.Codigo_Producto
+                Codigo_Producto: op.Codigo_Producto,
+                Planta: op.Planta || ''   // ✅ NUEVO: 'Spegazzini' / 'Valentín Alsina' (SP 2026-10-21)
             };
         });
-        
+
+        console.log(`🏭 Pendientes calidad: ${operacionesFormateadas.length} ops | Planta 1ra: "${operacionesFormateadas[0]?.Planta ?? ''}"`);
         res.status(200).json(operacionesFormateadas);
     } catch (error) {
         console.error("❌ Error en getOperacionesPendientesCalidad:", error);
         res.status(500).json({ error: error.message });
     }
 };
+
 
 // ============================================================================
 // OBTENER DEFECTOS DISPONIBLES (COMBO)
