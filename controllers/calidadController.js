@@ -990,117 +990,6 @@ const getDetalleOperacionCalidad = async (req, res) => {
     }
 };
 
-// // ============================================================================
-// // OBTENER OPERACIONES PENDIENTES DE CALIDAD (GRILLA PRINCIPAL)
-// // ============================================================================
-// const getOperacionesPendientesCalidad = async (req, res) => {
-//     try {
-//         const { maquina, verDefectosSobreorden } = req.query;
-//         console.log('🔵 Params calidad:', { maquina, verDefectosSobreorden });
-        
-//         const result = await dbRegistracionNET.raw("EXEC dbo.SP_TraerOperacionesCalidad");
-//         console.log("Resultados Calidad...:", result);
-        
-//         let operaciones = Array.isArray(result) ? result : (result[0] || []);
-        
-//         if (maquina && maquina !== 'TODAS') {
-//             operaciones = operaciones.filter(op => op.Maquina === maquina);
-//         }
-        
-//         const operacionesFiltradas = [];
-//         const sobreordenVal = verDefectosSobreorden === 'true' ? 1 : 0;
-        
-//         for (const op of operaciones) {
-//             let spName = '';
-//             let params = [];
-            
-//             if (op.Maquina === 'PL1' || op.Maquina === 'PL2' || op.Maquina === 'PL3' || op.Maquina === 'EMB') {
-//                 spName = 'dbo.SP_TraerCalidadPlanchaT';
-//                 params = [op.Operacion_ID, op.ItemPedido_ID || op.Origen_Lote_ID || '', op.Sobrante || 0, sobreordenVal, op.Lote_IDS || op.ID_LotePlancha || ''];
-//             } else if (op.Maquina === 'HOR') {
-//                 spName = 'dbo.SP_TraerCalidadHorno';
-//                 params = [op.Operacion_ID, op.Lote_IDS || '', 0];
-//             } else {
-//                 spName = 'dbo.SP_TraerCalidad';
-//                 params = [op.Operacion_ID, op.Lote_IDS || '', op.Sobrante || 0, sobreordenVal];
-//             }
-            
-//             try {
-//                 const placeholders = params.map(() => '?').join(', ');
-//                 const spResult = await dbRegistracionNET.raw(`EXEC ${spName} ${placeholders}`, params);
-//                 const spData = Array.isArray(spResult) ? spResult : (spResult[0] || []);
-//                 const operacionConCalidad = spData.find(row => parseInt(row.Dictamen) === 0);
-                
-//                 if (operacionConCalidad) {
-//                     operacionesFiltradas.push({ ...op, ...operacionConCalidad, Sobreorden: sobreordenVal.toString() });
-//                 }
-//             } catch (spError) {
-//                 console.error(`Error ejecutando ${spName}:`, spError.message);
-//             }
-//         }
-        
-//         const operacionesFormateadas = operacionesFiltradas.map(op => {
-//             const maquina = op.Maquina;
-//             const sobrante = parseInt(op.Sobrante || 0);
-//             const esPlancha = (maquina === 'PL1' || maquina === 'PL2' || maquina === 'PL3' || maquina === 'EMB');
-            
-//             let kilosCalidad = parseFloat(op.Kilos_Calidad || 0);
-//             let kilosSobreOrden = parseFloat(op.Kilos_Sobreorden || op.Kilos_SobreOrden || 0);
-//             let kilosBrutos = parseFloat(op.KilosBrutos || 0);
-            
-//             if (esPlancha && sobrante === 0) {
-//                 kilosCalidad = kilosSobreOrden;
-//                 kilosSobreOrden = 0;
-//             }
-            
-//             if (!esPlancha) {
-//                 kilosBrutos = 0;
-//             }
-            
-//             return {
-//                 Maquina: op.Maquina,
-//                 Tarea: op.Tarea,
-//                 NroBatch: op.NroBatch,
-//                 Cuchillas: op.Operacion_Cuchillas,
-//                 SerieLote: op.Destino_Lote || op.SerieLote,
-//                 NroOperacion: op.Nro_Operacion || op.Nro_Matching || '0',
-//                 Kilos_Calidad: kilosCalidad,
-//                 Kilos_Sobreorden: kilosSobreOrden,
-//                 Kilos_Bruto: kilosBrutos,
-//                 Tipo: op.Leyenda || (op.Sobrante == 1 ? 'Sobrante' : op.Sobrante == 2 ? 'Scrap' : 'SO'),
-//                 Lote_IDS: op.Lote_IDS,
-//                 Sobrante: sobrante,
-//                 Operacion_ID: op.Operacion_ID,
-//                 Codigo_Producto: op.Codigo_Producto
-//             };
-//         });
-        
-//         res.status(200).json(operacionesFormateadas);
-//     } catch (error) {
-//         console.error("❌ Error en getOperacionesPendientesCalidad:", error);
-//         res.status(500).json({ error: error.message });
-//     }
-// };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // ============================================================================
 // OBTENER OPERACIONES PENDIENTES DE CALIDAD (GRILLA PRINCIPAL)
 // ✅ Incluye la columna Planta agregada al SP_TraerOperacionesCalidad (2026-10-21)
@@ -1217,63 +1106,112 @@ const getDefectos = async (req, res) => {
     }
 };
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ============================================================================
-// GUARDAR REGISTRO DE CALIDAD
+// ✅✅ INSERT DE DEFECTO PLANCHA COMPATIBLE CON AMBAS VERSIONES DEL SP
+//    Detecta (cacheado) si SP_InsertarCalidadPlancha acepta @Serie_Lote y arma
+//    el EXEC con 16 o 15 params según el servidor donde estés parado.
+//    (Error 201 = falta parámetro | Error 8144 = sobra parámetro → ambos quedan cubiertos)
 // ============================================================================
+let _paramsSpInsertarCalidadPlancha = null;
+const getParamsSpInsertarCalidadPlancha = async () => {
+    if (_paramsSpInsertarCalidadPlancha) return _paramsSpInsertarCalidadPlancha;
+    try {
+        const r = await dbRegistracionNET.raw(
+            `SELECT name FROM sys.parameters
+             WHERE object_id = OBJECT_ID('dbo.SP_InsertarCalidadPlancha')
+             ORDER BY parameter_id`);
+        const rows = Array.isArray(r) ? r : (r[0] || []);
+        _paramsSpInsertarCalidadPlancha = rows.map(x => String(x.name).replace('@', '').toLowerCase());
+        console.log('🧩 [Calidad] Params reales de SP_InsertarCalidadPlancha:', _paramsSpInsertarCalidadPlancha.join(', '));
+    } catch (e) {
+        console.warn('⚠️ [Calidad] No se pudieron leer params del SP (asumo sin @Serie_Lote):', e.message);
+        _paramsSpInsertarCalidadPlancha = [];
+    }
+    return _paramsSpInsertarCalidadPlancha;
+};
+
+const insertarDefectoCalidadPlancha = async (trx, d, ctx) => {
+    const params = await getParamsSpInsertarCalidadPlancha();
+    const conSerie = params.includes('serie_lote');
+    const sqlBase = `EXEC SP_InsertarCalidadPlancha 
+         @Operacion_ID=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?, 
+         @Nota=?, @Lote_ID=?, @Sobrante=?, @ItemPedido_ID=?, @NumeroItem=?, 
+         @NumeroPedido=?, @Sobreorden=?, @ID_LotePlancha=?, @Usuario=?, @FechaReg=?`;
+    const values = [
+        ctx.operacionId,
+        ctx.familia,
+        d.codDefecto ?? d.defecto,
+        String(d.codGravedad ?? d.gravedad),
+        String(d.codUbicacion ?? d.ubicacion),
+        d.nota || '',
+        ctx.loteIDEntrante,
+        ctx.sobrante || 0,
+        ctx.itemPedidoId || '',
+        ctx.numeroItemInt,
+        ctx.numeroPedido || '',
+        0,
+        ctx.idLotePlancha,
+        ctx.usuario || 'pmorrone',
+        ctx.fechaReg
+    ];
+    if (conSerie) {
+        await trx.raw(`${sqlBase}, @Serie_Lote=?`, [...values, ctx.serieLote]);
+    } else {
+        await trx.raw(sqlBase, values);
+    }
+};
+
+
+
+
+
+// // Guardar defectos de calidad (PLANCHAS / EMBALAJE)
 // const guardarCalidad = async (req, res) => {
-//     const { operacionId, loteIds, familia, codigo, gravedad, ubicacion, nota, usuario, sobrante, sobreorden } = req.body;
+//     const { operacionId, itemPedidoId, numeroItem, sobrante, lineaData, defectos, usuario } = req.body;
 //     const transaction = await dbRegistracionNET.transaction();
 //     try {
 //         const fechaReg = new Date().toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
-//         const [opInfo] = await transaction.raw("SELECT Maquina FROM OperacionesCalipso WHERE Operacion_ID = ?", [operacionId]);
-//         const maquina = opInfo?.Maquina || 'SL1';
-        
-//         if (maquina === 'PL1' || maquina === 'PL2' || maquina === 'PL3' || maquina === 'EMB') {
-//             await transaction.raw(`EXEC dbo.SP_InsertarCalidadPlancha @Operacion_ID=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?, @Nota=?, @Lote_ID=?, @Sobrante=?, @ItemPedido_ID=?, @NumeroItem=?, @NumeroPedido=?, @Sobreorden=?, @ID_LotePlancha=?, @Usuario=?, @FechaReg=?`,
-//                 [operacionId, familia, codigo, gravedad, ubicacion, nota, loteIds, sobrante || 0, '', 0, '', sobreorden || 0, loteIds, usuario || 'admin', fechaReg]);
-//         } else if (maquina === 'HOR') {
-//             await transaction.raw(`EXEC dbo.SP_InsertarCalidadHornos @Operacion_ID=?, @Destino_Lote=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?, @Nota=?, @Lote_IDS=?, @Lote_ID=?, @Sobrante=?, @Sobreorden=?, @Horno=?, @Horneada=?, @KilosHorneada=?, @Usuario=?, @FechaReg=?`,
-//                 [operacionId, '', familia, codigo, gravedad, ubicacion, nota, loteIds, loteIds, 0, 0, 0, 0, 0, usuario || 'admin', fechaReg]);
-//         } else {
-//             await transaction.raw(`EXEC dbo.SP_InsertarCalidad @Operacion_ID=?, @Destino_Lote=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?, @Nota=?, @Lote_IDS=?, @Lote_ID=?, @Sobrante=?, @Sobreorden=?, @Usuario=?, @FechaReg=?`,
-//                 [operacionId, '', familia, codigo, gravedad, ubicacion, nota, loteIds, loteIds, sobrante || 0, sobreorden || 0, usuario || 'admin', fechaReg]);
-//         }
-        
-//         await transaction.commit();
-//         res.status(200).json({ success: true, message: "Calidad registrada correctamente" });
-//     } catch (error) {
-//         await transaction.rollback();
-//         console.error("❌ Error en guardarCalidad:", error);
-//         res.status(500).json({ error: error.message });
-//     }
-// };
 
+//         const idLotePlancha  = lineaData?.Lote_IDS || lineaData?.ID_LotePlancha || '';
+//         const loteIDEntrante = lineaData?.Origen_Lote_ID || lineaData?.LoteID || '';
+//         const numeroItemInt  = parseInt(numeroItem) || 0;
+//         const numeroPedido   = lineaData?.NumeroPedido || '';
+//         const familia        = String(lineaData?.CodigoProducto || '').substring(8, 10) || 'HO';
+//         // ✅✅ @Serie_Lote: serie/lote DEL PAQUETE (11 chars, misma convención que las grillas)
+//         const serieLote = String(
+//             lineaData?.SerieLotePaquete || lineaData?.LotePlanchaDesc || lineaData?.SerieLote || lineaData?.Destino_Lote || ''
+//         ).substring(0, 11);
 
+//         // 0) PURGA de pendientes huérfanos a nivel item (anti-acumulación; el 🗑️ del modal sincroniza de verdad)
+//         try {
+//             await transaction.raw(
+//                 `DELETE FROM CalidadPlancha
+//                  WHERE Operacion_ID = ? AND ItemPedido_ID = ? AND NumeroItem = ? AND Sobrante = 0 AND Dictamen = 0`,
+//                 [operacionId, itemPedidoId || '', numeroItemInt]);
+//         } catch (e) { console.warn('⚠️ purge pendientes CalidadPlancha:', e.message); }
 
-
-
-
-
-
-
-
-
-// Guardar defectos de calidad (PLANCHAS / EMBALAJE)
-// const guardarCalidad = async (req, res) => {
-//     const { operacionId, itemPedidoId, numeroItem, sobrante, lineaData, defectos } = req.body;
-//     const transaction = await dbRegistracionNET.transaction();
-//     try {
-//         const fechaReg = new Date().toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
-
-//         // ✅ Lote del paquete (ID_LotePlancha) y lote entrante (Lote_ID)
-//         const idLotePlancha   = lineaData?.Lote_IDS || lineaData?.ID_LotePlancha || '';
-//         const loteIDEntrante  = lineaData?.Origen_Lote_ID || lineaData?.LoteID || '';
-//         const numeroItemInt   = parseInt(numeroItem) || 0;
-//         const numeroPedido    = lineaData?.NumeroPedido || '';
-//         const familia         = String(lineaData?.CodigoProducto || '').substring(8, 10) || 'HO';
-
-//         // 1) Elimino defectos existentes
-//         // ✅✅ EL FIX: el SP espera 5 parámetros — faltaba @ID_LotePlancha (por eso explotaba solo en Embalaje)
+//         // 1) Elimino defectos existentes del lote (SP oficial, 5 params con @ID_LotePlancha)
 //         await transaction.raw(
 //             "EXEC SP_EliminarCalidadPlancha @Operacion_ID=?, @ItemPedido_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?",
 //             [operacionId, itemPedidoId || '', numeroItemInt, sobrante || 0, idLotePlancha]
@@ -1285,68 +1223,30 @@ const getDefectos = async (req, res) => {
 //             [operacionId, numeroItemInt, sobrante || 0, idLotePlancha, 1]
 //         );
 
-//         // // 3) Inserto cada defecto con los datos REALES del paquete
-//         // //    (antes @ItemPedido_ID / @NumeroItem / @NumeroPedido iban vacíos y el
-//         // //     SP_TraerCalidadPlanchaT no los encontraba después)
-//         // for (const d of defectos) {
-//         //     await transaction.raw(
-//         //         `EXEC SP_InsertarCalidadPlancha 
-//         //          @Operacion_ID=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?, 
-//         //          @Nota=?, @Lote_ID=?, @Sobrante=?, @ItemPedido_ID=?, @NumeroItem=?, 
-//         //          @NumeroPedido=?, @Sobreorden=?, @ID_LotePlancha=?, @Usuario=?, @FechaReg=?`,
-//         //         [
-//         //             operacionId,
-//         //             familia,
-//         //             d.codDefecto,
-//         //             String(d.codGravedad),
-//         //             String(d.codUbicacion),
-//         //             d.nota || '',
-//         //             loteIDEntrante,     // @Lote_ID = lote entrante (como el VB)
-//         //             sobrante || 0,
-//         //             itemPedidoId || '', // @ItemPedido_ID real
-//         //             numeroItemInt,      // @NumeroItem real
-//         //             numeroPedido,       // @NumeroPedido real
-//         //             0,                  // @Sobreorden (calidad normal)
-//         //             idLotePlancha,      // @ID_LotePlancha = lote del paquete
-//         //             req.body.usuario || 'pmorrone',
-//         //             fechaReg
-//         //         ]
-//         //     );
-//         // }
-
-
-
-
-
-
-
-
-
-
-//         // 3) Inserto cada defecto con los datos REALES del paquete
+//         // 3) Inserto cada defecto — 16 params (el #16 es @Serie_Lote, el que faltaba)
 //         for (const d of defectos) {
 //             await transaction.raw(
 //                 `EXEC SP_InsertarCalidadPlancha 
-//                 @Operacion_ID=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?, 
-//                 @Nota=?, @Lote_ID=?, @Sobrante=?, @ItemPedido_ID=?, @NumeroItem=?, 
-//                 @NumeroPedido=?, @Sobreorden=?, @ID_LotePlancha=?, @Usuario=?, @FechaReg=?, @Serie_Lote=?`, // ✅ AGREGADO @Serie_Lote
+//                  @Operacion_ID=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?, 
+//                  @Nota=?, @Lote_ID=?, @Sobrante=?, @ItemPedido_ID=?, @NumeroItem=?, 
+//                  @NumeroPedido=?, @Sobreorden=?, @ID_LotePlancha=?, @Usuario=?, @FechaReg=?, @Serie_Lote=?`,
 //                 [
-//                     operacionId,
-//                     familia,
-//                     d.codDefecto,
-//                     String(d.codGravedad),
-//                     String(d.codUbicacion),
-//                     d.nota || '',
-//                     loteIDEntrante,     // @Lote_ID = lote entrante (como el VB)
-//                     sobrante || 0,
-//                     itemPedidoId || '', // @ItemPedido_ID real
-//                     numeroItemInt,      // @NumeroItem real
-//                     numeroPedido,       // @NumeroPedido real
-//                     0,                  // @Sobreorden (calidad normal)
-//                     idLotePlancha,      // @ID_LotePlancha = lote del paquete
-//                     req.body.usuario || 'pmorrone',
-//                     fechaReg,
-//                     lineaData?.SerieLote || lineaData?.Destino_Lote || lineaData?.LotePlanchaDesc || '' // ✅ VALOR PARA @Serie_Lote
+//                     operacionId,          // @Operacion_ID
+//                     familia,              // @Familia
+//                     d.codDefecto,         // @Codigo
+//                     String(d.codGravedad),// @Gravedad
+//                     String(d.codUbicacion),// @Ubicacion
+//                     d.nota || '',         // @Nota
+//                     loteIDEntrante,       // @Lote_ID (lote entrante)
+//                     sobrante || 0,        // @Sobrante
+//                     itemPedidoId || '',   // @ItemPedido_ID (item de la línea)
+//                     numeroItemInt,        // @NumeroItem
+//                     numeroPedido,         // @NumeroPedido
+//                     0,                    // @Sobreorden (calidad normal)
+//                     idLotePlancha,        // @ID_LotePlancha (lote del paquete)
+//                     usuario || 'pmorrone',// @Usuario
+//                     fechaReg,             // @FechaReg
+//                     serieLote             // ✅ @Serie_Lote  ← EL QUE FALTABA
 //                 ]
 //             );
 //         }
@@ -1355,18 +1255,10 @@ const getDefectos = async (req, res) => {
 //         res.json({ success: true, message: 'Defectos guardados correctamente' });
 //     } catch (error) {
 //         await transaction.rollback();
-//         console.error('Error al guardar calidad:', error);
+//         console.error('Error al guardar calidad (Embalaje/Plancha):', error);
 //         res.status(500).json({ error: error.message });
 //     }
 // };
-
-
-
-
-
-
-
-
 
 
 
@@ -1379,66 +1271,45 @@ const guardarCalidad = async (req, res) => {
     const transaction = await dbRegistracionNET.transaction();
     try {
         const fechaReg = new Date().toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
-
         const idLotePlancha  = lineaData?.Lote_IDS || lineaData?.ID_LotePlancha || '';
         const loteIDEntrante = lineaData?.Origen_Lote_ID || lineaData?.LoteID || '';
         const numeroItemInt  = parseInt(numeroItem) || 0;
         const numeroPedido   = lineaData?.NumeroPedido || '';
         const familia        = String(lineaData?.CodigoProducto || '').substring(8, 10) || 'HO';
-        // ✅✅ @Serie_Lote: serie/lote DEL PAQUETE (11 chars, misma convención que las grillas)
-        const serieLote = String(
+        const serieLote      = String(
             lineaData?.SerieLotePaquete || lineaData?.LotePlanchaDesc || lineaData?.SerieLote || lineaData?.Destino_Lote || ''
         ).substring(0, 11);
 
-        // 0) PURGA de pendientes huérfanos a nivel item (anti-acumulación; el 🗑️ del modal sincroniza de verdad)
+        // 0) ✅ PURGA REAL sobre la tabla verdadera (CalidadFinal): pendientes del ITEM.
+        //    (El viejo DELETE FROM CalidadPlancha fallaba silencioso: esa tabla no existe.)
         try {
             await transaction.raw(
-                `DELETE FROM CalidadPlancha
-                 WHERE Operacion_ID = ? AND ItemPedido_ID = ? AND NumeroItem = ? AND Sobrante = 0 AND Dictamen = 0`,
-                [operacionId, itemPedidoId || '', numeroItemInt]);
-        } catch (e) { console.warn('⚠️ purge pendientes CalidadPlancha:', e.message); }
+                `DELETE FROM dbo.CalidadFinal
+                 WHERE Operacion_ID = ? AND ItemPedido_ID = ? AND NumeroItem = ? AND Sobrante = ?
+                   AND (Dictamen IS NULL OR Dictamen = 0)`,
+                [operacionId, itemPedidoId || '', numeroItemInt, sobrante || 0]);
+        } catch (e) { console.warn('⚠️ purge CalidadFinal:', e.message); }
 
-        // 1) Elimino defectos existentes del lote (SP oficial, 5 params con @ID_LotePlancha)
+        // 1) SP oficial de borrado por lote (paridad VB)
         await transaction.raw(
             "EXEC SP_EliminarCalidadPlancha @Operacion_ID=?, @ItemPedido_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?",
-            [operacionId, itemPedidoId || '', numeroItemInt, sobrante || 0, idLotePlancha]
-        );
+            [operacionId, itemPedidoId || '', numeroItemInt, sobrante || 0, idLotePlancha]);
 
-        // 2) Marco la línea como "en calidad"
+        // 2) Marco los atados del paquete como "en calidad"
         await transaction.raw(
             "EXEC SP_EditarAtadosRegistradosPlanchaCalidad @Operacion_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?, @Calidad=?",
-            [operacionId, numeroItemInt, sobrante || 0, idLotePlancha, 1]
-        );
+            [operacionId, numeroItemInt, sobrante || 0, idLotePlancha, 1]);
 
-        // 3) Inserto cada defecto — 16 params (el #16 es @Serie_Lote, el que faltaba)
-        for (const d of defectos) {
-            await transaction.raw(
-                `EXEC SP_InsertarCalidadPlancha 
-                 @Operacion_ID=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?, 
-                 @Nota=?, @Lote_ID=?, @Sobrante=?, @ItemPedido_ID=?, @NumeroItem=?, 
-                 @NumeroPedido=?, @Sobreorden=?, @ID_LotePlancha=?, @Usuario=?, @FechaReg=?, @Serie_Lote=?`,
-                [
-                    operacionId,          // @Operacion_ID
-                    familia,              // @Familia
-                    d.codDefecto,         // @Codigo
-                    String(d.codGravedad),// @Gravedad
-                    String(d.codUbicacion),// @Ubicacion
-                    d.nota || '',         // @Nota
-                    loteIDEntrante,       // @Lote_ID (lote entrante)
-                    sobrante || 0,        // @Sobrante
-                    itemPedidoId || '',   // @ItemPedido_ID (item de la línea)
-                    numeroItemInt,        // @NumeroItem
-                    numeroPedido,         // @NumeroPedido
-                    0,                    // @Sobreorden (calidad normal)
-                    idLotePlancha,        // @ID_LotePlancha (lote del paquete)
-                    usuario || 'pmorrone',// @Usuario
-                    fechaReg,             // @FechaReg
-                    serieLote             // ✅ @Serie_Lote  ← EL QUE FALTABA
-                ]
-            );
+        // 3) ✅ Inserto cada defecto con params dinámicos (15 o 16 según el SP del server)
+        for (const d of (defectos || [])) {
+            await insertarDefectoCalidadPlancha(transaction, d, {
+                operacionId, familia, loteIDEntrante, sobrante, itemPedidoId,
+                numeroItemInt, numeroPedido, idLotePlancha, usuario, fechaReg, serieLote
+            });
         }
 
         await transaction.commit();
+        console.log(`✅ [Calidad] SYNC embalaje item=${itemPedidoId} lote=${idLotePlancha} -> ${(defectos || []).length} defectos`);
         res.json({ success: true, message: 'Defectos guardados correctamente' });
     } catch (error) {
         await transaction.rollback();
@@ -1446,6 +1317,9 @@ const guardarCalidad = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+
+
+
 
 
 // ============================================================================
@@ -1613,18 +1487,6 @@ const actualizarDictamen = async (req, res) => {
 };
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 // ============================================================================
 // SINCRONIZAR DEFECTOS EN BD (Agregar/Modificar/Eliminar del modal)
 // Replica btnConfirma_Click del soft original: elimina existentes e inserta la lista
@@ -1740,311 +1602,6 @@ const sincronizarDefectosCalidad = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
-
-// // ============================================================================
-// // ELIMINAR UN DEFECTO POR ID (🗑️ del modal) - VERSIÓN ROBUSTA
-// // ============================================================================
-// const eliminarDefectoCalidad = async (req, res) => {
-//     const { defectoId, flujo, operacionId, itemPedidoId, numeroItem, sobrante, idLotePlancha } = req.body;
-    
-//     if (!defectoId) {
-//         return res.status(400).json({ error: 'Falta el ID del defecto a eliminar.' });
-//     }
-    
-//     // Para embalaje/plancha necesitamos los datos del lote para usar el SP
-//     if ((flujo === 'embalaje' || flujo === 'plancha') && (!operacionId || !itemPedidoId || !idLotePlancha)) {
-//         return res.status(400).json({ 
-//             error: 'Para embalaje/plancha se requieren: operacionId, itemPedidoId, numeroItem, idLotePlancha' 
-//         });
-//     }
-    
-//     const transaction = await dbRegistracionNET.transaction();
-//     try {
-//         if (flujo === 'embalaje' || flujo === 'plancha') {
-//             // ✅ ESTRATEGIA: Obtener todos los defectos actuales, eliminar el específico,
-//             // y usar el SP oficial para re-sincronizar
-            
-//             // 1) Obtener todos los defectos pendientes del lote
-//             const defectosActuales = await transaction.raw(
-//                 `EXEC dbo.SP_TraerCalidadPlanchaT @Operacion_ID=?, @ItemPedido_ID=?, @Sobrante=?, @Sobreorden=?, @ID_LotePlancha=?`,
-//                 [operacionId, itemPedidoId || '', sobrante || 0, 0, idLotePlancha]
-//             );
-            
-//             const defectosArray = Array.isArray(defectosActuales) ? defectosActuales : (defectosActuales[0] || []);
-//             const defectosFiltrados = defectosArray
-//                 .filter(row => parseInt(row.Dictamen) === 0 && row.ID !== defectoId)
-//                 .map(row => ({
-//                     codDefecto: row.Codigo,
-//                     codGravedad: String(row.Gravedad),
-//                     codUbicacion: String(row.Ubicacion),
-//                     nota: row.Nota || ''
-//                 }));
-            
-//             // 2) Eliminar TODOS los defectos del lote usando el SP oficial
-//             await transaction.raw(
-//                 `EXEC dbo.SP_EliminarCalidadPlancha @Operacion_ID=?, @ItemPedido_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?`,
-//                 [operacionId, itemPedidoId || '', parseInt(numeroItem) || 0, sobrante || 0, idLotePlancha]
-//             );
-            
-//             // 3) Re-insertar los defectos restantes (sin el eliminado)
-//             const fechaReg = new Date().toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
-//             const familia = 'HO'; // Se puede obtener del Codigo_Producto si es necesario
-            
-//             for (const d of defectosFiltrados) {
-//                 await transaction.raw(
-//                     `EXEC dbo.SP_InsertarCalidadPlancha 
-//                      @Operacion_ID=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?, 
-//                      @Nota=?, @Lote_ID=?, @Sobrante=?, @ItemPedido_ID=?, @NumeroItem=?, 
-//                      @NumeroPedido=?, @Sobreorden=?, @ID_LotePlancha=?, @Usuario=?, @FechaReg=?, @Serie_Lote=?`,
-//                     [
-//                         operacionId,
-//                         familia,
-//                         d.codDefecto,
-//                         d.codGravedad,
-//                         d.codUbicacion,
-//                         d.nota || '',
-//                         idLotePlancha,
-//                         sobrante || 0,
-//                         itemPedidoId || '',
-//                         parseInt(numeroItem) || 0,
-//                         '', // NumeroPedido
-//                         0,  // Sobreorden
-//                         idLotePlancha,
-//                         req.body.usuario || 'admin',
-//                         fechaReg,
-//                         ''  // Serie_Lote
-//                     ]
-//                 );
-//             }
-            
-//             await transaction.commit();
-//             console.log(`🗑️ [Calidad] Defecto ID ${defectoId} eliminado correctamente`);
-//             res.status(200).json({ 
-//                 success: true, 
-//                 message: 'Defecto eliminado correctamente',
-//                 restantes: defectosFiltrados.length 
-//             });
-            
-//         } else {
-//             // Para Slitter, intentar con diferentes nombres de tabla
-//             const tabla = 'Calidad'; // Slitter usa la tabla Calidad
-            
-//             const chk = await transaction.raw(`SELECT TOP 1 ID FROM dbo.${tabla} WHERE ID = ?`, [defectoId]);
-//             const rows = Array.isArray(chk) ? chk : (chk[0] || []);
-            
-//             if (!rows || rows.length === 0) {
-//                 await transaction.rollback();
-//                 return res.status(404).json({ error: 'El defecto ya no existe en la base de datos.' });
-//             }
-            
-//             await transaction.raw(`DELETE FROM dbo.${tabla} WHERE ID = ?`, [defectoId]);
-//             await transaction.commit();
-            
-//             console.log(`🗑️ [Calidad] Defecto ID ${defectoId} eliminado de ${tabla}`);
-//             res.status(200).json({ success: true, message: 'Defecto eliminado correctamente' });
-//         }
-//     } catch (error) {
-//         await transaction.rollback();
-//         console.error('❌ Error en eliminarDefectoCalidad:', error);
-//         res.status(500).json({ error: error.message });
-//     }
-// };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// // ============================================================================
-// // ELIMINAR UN DEFECTO POR ID (🗑️ del modal) - DELETE directo por PK
-// // ============================================================================
-// const eliminarDefectoCalidad = async (req, res) => {
-//     const { defectoId } = req.body;
-//     if (!defectoId) {
-//         return res.status(400).json({ error: 'Falta el ID del defecto a eliminar.' });
-//     }
-//     try {
-//         // 1) Verifico que exista y su dictamen REAL en la tabla
-//         const chk = await dbRegistracionNET.raw(
-//             `SELECT TOP 1 ID, Dictamen FROM dbo.Calidad WHERE ID = ?`,
-//             [defectoId]
-//         );
-//         const rows = Array.isArray(chk) ? chk : (chk[0] || []);
-//         if (!rows || rows.length === 0) {
-//             return res.status(404).json({ error: 'El defecto ya no existe en la base de datos.' });
-//         }
-
-//         // ✅✅ FIX: los pendientes viven con Dictamen = NULL en la tabla (el SP los
-//         //    devuelve como 0 por ISNULL). parseInt(NULL) = NaN, y antes "NaN !== 0"
-//         //    disparaba el falso "ya tiene dictamen". Ahora solo bloqueo con 1 o 2.
-//         const dictamen = parseInt(rows[0].Dictamen);
-//         console.log(`🔎 [Calidad] Defecto ID ${defectoId} -> Dictamen crudo:`, rows[0].Dictamen, '| parseado:', dictamen);
-//         if (dictamen === 1 || dictamen === 2) {
-//             return res.status(400).json({ error: 'El defecto ya tiene dictamen: no se puede eliminar desde acá.' });
-//         }
-
-//         // 2) DELETE directo por PK (tabla única: dbo.Calidad para slitter y plancha/embalaje)
-//         await dbRegistracionNET.raw(`DELETE FROM dbo.Calidad WHERE ID = ?`, [defectoId]);
-//         console.log(`🗑️ [Calidad] Defecto ID ${defectoId} ELIMINADO de dbo.Calidad`);
-
-//         res.status(200).json({ success: true, message: 'Defecto eliminado correctamente' });
-//     } catch (error) {
-//         console.error('❌ Error en eliminarDefectoCalidad:', error);
-//         res.status(500).json({ error: error.message });
-//     }
-// };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// // ============================================================================
-// // ELIMINAR UN DEFECTO POR ID (🗑️ del modal)
-// // ✅ DELETE directo por PK sobre la tabla REAL de defectos con Dictamen
-// //    (la descubro por catálogo: evita depender de si se llama Calidad,
-// //     CalidadPlancha en otro esquema, etc.). Solo borra pendientes (0/NULL).
-// // ============================================================================
-// const eliminarDefectoCalidad = async (req, res) => {
-//     const { defectoId } = req.body;
-//     if (!defectoId) {
-//         return res.status(400).json({ error: 'Falta el ID del defecto a eliminar.' });
-//     }
-//     try {
-//         // 1) Tablas de calidad que tienen ID + Dictamen (plancha primero)
-//         const tabsRaw = await dbRegistracionNET.raw(`
-//             SELECT c.TABLE_SCHEMA AS sch, c.TABLE_NAME AS tbl
-//             FROM INFORMATION_SCHEMA.COLUMNS c
-//             WHERE c.COLUMN_NAME = 'Dictamen'
-//               AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS k
-//                           WHERE k.TABLE_NAME = c.TABLE_NAME
-//                             AND k.TABLE_SCHEMA = c.TABLE_SCHEMA
-//                             AND k.COLUMN_NAME = 'ID')
-//             ORDER BY CASE WHEN c.TABLE_NAME LIKE '%Plancha%' THEN 0 ELSE 1 END, c.TABLE_NAME`);
-//         const tabs = Array.isArray(tabsRaw) ? tabsRaw : (tabsRaw[0] || []);
-
-//         for (const t of tabs) {
-//             const full = `[${t.sch}].[${t.tbl}]`;
-//             const chk = await dbRegistracionNET.raw(
-//                 `SELECT TOP 1 ID, Dictamen FROM ${full} WHERE ID = ?`, [defectoId]);
-//             const rows = Array.isArray(chk) ? chk : (chk[0] || []);
-//             if (!rows || rows.length === 0) continue;               // no está en esta tabla
-//             const dict = parseInt(rows[0].Dictamen);
-//             if (dict === 1 || dict === 2) {
-//                 return res.status(400).json({ error: `El defecto ya tiene dictamen (${dict}) en ${t.tbl}: no se puede eliminar.` });
-//             }
-//             // 2) DELETE directo por PK (pendiente 0/NULL)
-//             await dbRegistracionNET.raw(`DELETE FROM ${full} WHERE ID = ?`, [defectoId]);
-//             console.log(`🗑️ [Calidad] Defecto ID ${defectoId} ELIMINADO de ${t.sch}.${t.tbl}`);
-//             return res.status(200).json({ success: true, message: `Defecto eliminado de ${t.sch}.${t.tbl}` });
-//         }
-
-//         return res.status(404).json({ error: `El defecto ID ${defectoId} no existe (o ya fue eliminado).` });
-//     } catch (error) {
-//         console.error('❌ Error en eliminarDefectoCalidad:', error);
-//         res.status(500).json({ error: error.message });
-//     }
-// };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// // ============================================================================
-// // ELIMINAR UN DEFECTO POR ID (🗑️ del modal)
-// // ✅ DELETE directo por PK sobre dbo.Calidad, SIN guarda de Dictamen:
-// //    el modal solo lista filas que el SP devuelve como pendientes, así que
-// //    cualquier ID que llegue desde el 🗑️ es borrable.
-// // ============================================================================
-// const eliminarDefectoCalidad = async (req, res) => {
-//     const { defectoId } = req.body;
-//     if (!defectoId) {
-//         return res.status(400).json({ error: 'Falta el ID del defecto a eliminar.' });
-//     }
-//     try {
-//         // Log de trazabilidad: qué fila vamos a borrar
-//         const chk = await dbRegistracionNET.raw(
-//             `SELECT TOP 1 ID, Operacion_ID, ItemPedido_ID, ID_LotePlancha, Codigo, Dictamen
-//              FROM dbo.Calidad WHERE ID = ?`, [defectoId]);
-//         const rows = Array.isArray(chk) ? chk : (chk[0] || []);
-//         if (!rows || rows.length === 0) {
-//             console.log(`🗑️ [Calidad] ID ${defectoId} ya no existe en dbo.Calidad (nada que borrar)`);
-//             return res.status(404).json({ error: 'El defecto ya no existe en la base de datos.' });
-//         }
-//         console.log(`🗑️ [Calidad] Borrando fila:`, rows[0]);
-
-//         const del = await dbRegistracionNET.raw(
-//             `DELETE FROM dbo.Calidad WHERE ID = ?`, [defectoId]);
-//         console.log(`✅ [Calidad] DELETE dbo.Calidad ID ${defectoId} OK`);
-
-//         res.status(200).json({ success: true, message: 'Defecto eliminado de la tabla', id: defectoId });
-//     } catch (error) {
-//         console.error('❌ Error en eliminarDefectoCalidad:', error);
-//         res.status(500).json({ error: error.message });
-//     }
-// };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // ============================================================================
 // ELIMINAR UN DEFECTO POR ID (🗑️ del modal)
