@@ -44,8 +44,10 @@ const {
     getOperacionesPlancha,
     verificarEstadoOperacion,
     contarOperacionesARegistrarEmbalaje,
+    validarCierre,
     obtenerUltimaMultiOperacion,
     procesarMultiOperacion,
+    pesarOperacionEmbalaje,
     getDefectosByFamilia,
     getCalidadRegistrada,
     guardarCalidad,
@@ -67,8 +69,10 @@ router.get('/operaciones/plancha/:maquinaId', getOperacionesPlancha);
 // Agregar estas rutas después de las existentes
 router.get('/operaciones/verificar-estado/:operacionId', verificarEstadoOperacion);
 router.get('/operaciones/contar-registrar-embalaje/:operacionId', contarOperacionesARegistrarEmbalaje);
+router.get('/operaciones/validar-cierre/:operacionId', validarCierre);
 router.get('/operaciones/ultima-multioperacion', obtenerUltimaMultiOperacion);
 router.post('/operaciones/procesar-multioperacion', procesarMultiOperacion);
+router.post('/operaciones/pesar', pesarOperacionEmbalaje);
 
 router.post("/operaciones/procesar", procesarOperaciones);
 router.get("/detalle/:operacionId", getDetalleOperacion);
