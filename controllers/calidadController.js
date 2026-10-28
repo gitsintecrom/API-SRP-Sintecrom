@@ -990,13 +990,126 @@ const getDetalleOperacionCalidad = async (req, res) => {
     }
 };
 
+// // ============================================================================
+// // OBTENER OPERACIONES PENDIENTES DE CALIDAD (GRILLA PRINCIPAL)
+// // ✅ Incluye la columna Planta agregada al SP_TraerOperacionesCalidad (2026-10-21)
+// // ============================================================================
+// const getOperacionesPendientesCalidad = async (req, res) => {
+//     try {
+//         const { maquina, verDefectosSobreorden } = req.query;
+//         console.log('🔵 Params calidad:', { maquina, verDefectosSobreorden });
+
+//         const result = await dbRegistracionNET.raw("EXEC dbo.SP_TraerOperacionesCalidad");
+//         let operaciones = Array.isArray(result) ? result : (result[0] || []);
+
+//         if (maquina && maquina !== 'TODAS') {
+//             operaciones = operaciones.filter(op => op.Maquina === maquina);
+//         }
+
+//         const operacionesFiltradas = [];
+//         const sobreordenVal = verDefectosSobreorden === 'true' ? 1 : 0;
+
+//         for (const op of operaciones) {
+//             let spName = '';
+//             let params = [];
+
+//             if (op.Maquina === 'PL1' || op.Maquina === 'PL2' || op.Maquina === 'PL3' || op.Maquina === 'EMB') {
+//                 spName = 'dbo.SP_TraerCalidadPlanchaT';
+//                 params = [op.Operacion_ID, op.ItemPedido_ID || op.Origen_Lote_ID || '', op.Sobrante || 0, sobreordenVal, op.Lote_IDS || op.ID_LotePlancha || ''];
+//             } else if (op.Maquina === 'HOR') {
+//                 spName = 'dbo.SP_TraerCalidadHorno';
+//                 params = [op.Operacion_ID, op.Lote_IDS || '', 0];
+//             } else {
+//                 spName = 'dbo.SP_TraerCalidad';
+//                 params = [op.Operacion_ID, op.Lote_IDS || '', op.Sobrante || 0, sobreordenVal];
+//             }
+
+//             try {
+//                 const placeholders = params.map(() => '?').join(', ');
+//                 const spResult = await dbRegistracionNET.raw(`EXEC ${spName} ${placeholders}`, params);
+//                 const spData = Array.isArray(spResult) ? spResult : (spResult[0] || []);
+//                 const operacionConCalidad = spData.find(row => parseInt(row.Dictamen) === 0);
+
+//                 if (operacionConCalidad) {
+//                     // ✅✅ Planta se fija DESPUÉS del spread: los SPs de defectos no la traen
+//                     //    y no queremos que un undefined la pise.
+//                     operacionesFiltradas.push({
+//                         ...op,
+//                         ...operacionConCalidad,
+//                         Planta: op.Planta || '',
+//                         Sobreorden: sobreordenVal.toString()
+//                     });
+//                 }
+//             } catch (spError) {
+//                 console.error(`Error ejecutando ${spName}:`, spError.message);
+//             }
+//         }
+
+//         const operacionesFormateadas = operacionesFiltradas.map(op => {
+//             const maquina = op.Maquina;
+//             const sobrante = parseInt(op.Sobrante || 0);
+//             const esPlancha = (maquina === 'PL1' || maquina === 'PL2' || maquina === 'PL3' || maquina === 'EMB');
+
+//             let kilosCalidad = parseFloat(op.Kilos_Calidad || 0);
+//             let kilosSobreOrden = parseFloat(op.Kilos_Sobreorden || op.Kilos_SobreOrden || 0);
+//             let kilosBrutos = parseFloat(op.KilosBrutos || 0);
+
+//             if (esPlancha && sobrante === 0) {
+//                 kilosCalidad = kilosSobreOrden;
+//                 kilosSobreOrden = 0;
+//             }
+
+//             if (!esPlancha) {
+//                 kilosBrutos = 0;
+//             }
+
+//             return {
+//                 Maquina: op.Maquina,
+//                 Tarea: op.Tarea,
+//                 NroBatch: op.NroBatch,
+//                 Cuchillas: op.Operacion_Cuchillas,
+//                 SerieLote: op.Destino_Lote || op.SerieLote,
+//                 NroOperacion: op.Nro_Operacion || op.Nro_Matching || '0',
+//                 Kilos_Calidad: kilosCalidad,
+//                 Kilos_Sobreorden: kilosSobreOrden,
+//                 Kilos_Bruto: kilosBrutos,
+//                 Tipo: op.Leyenda || (op.Sobrante == 1 ? 'Sobrante' : op.Sobrante == 2 ? 'Scrap' : 'SO'),
+//                 Lote_IDS: op.Lote_IDS,
+//                 Sobrante: sobrante,
+//                 Operacion_ID: op.Operacion_ID,
+//                 Codigo_Producto: op.Codigo_Producto,
+//                 Planta: op.Planta || ''   // ✅ NUEVO: 'Spegazzini' / 'Valentín Alsina' (SP 2026-10-21)
+//             };
+//         });
+
+//         console.log(`🏭 Pendientes calidad: ${operacionesFormateadas.length} ops | Planta 1ra: "${operacionesFormateadas[0]?.Planta ?? ''}"`);
+//         res.status(200).json(operacionesFormateadas);
+//     } catch (error) {
+//         console.error("❌ Error en getOperacionesPendientesCalidad:", error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
+
+
+
+
+
+
+
+
 // ============================================================================
 // OBTENER OPERACIONES PENDIENTES DE CALIDAD (GRILLA PRINCIPAL)
-// ✅ Incluye la columna Planta agregada al SP_TraerOperacionesCalidad (2026-10-21)
+// ✅✅ FIX DEFINITIVO: para PLANCHAS/EMB, NO filtramos por Sobreorden de la fila
+//    de SP_TraerOperacionesCalidad. Simplemente ejecutamos SP_TraerCalidadPlanchaT
+//    con las claves de la fila y si devuelve Dictamen=0, la incluimos.
+//    Esto es exactamente lo que hace el VB (Cargo_Grilla).
 // ============================================================================
 const getOperacionesPendientesCalidad = async (req, res) => {
     try {
         const { maquina, verDefectosSobreorden } = req.query;
+        const sobreordenVal = verDefectosSobreorden === 'true' ? 1 : 0;
         console.log('🔵 Params calidad:', { maquina, verDefectosSobreorden });
 
         const result = await dbRegistracionNET.raw("EXEC dbo.SP_TraerOperacionesCalidad");
@@ -1006,22 +1119,70 @@ const getOperacionesPendientesCalidad = async (req, res) => {
             operaciones = operaciones.filter(op => op.Maquina === maquina);
         }
 
+        const asRows = (r) => (Array.isArray(r) ? r : (r && Array.isArray(r[0]) ? r[0] : (r ? [r] : [])));
+        const esPlanchaMaquina = (m) => (m === 'PL1' || m === 'PL2' || m === 'PL3' || m === 'EMB');
         const operacionesFiltradas = [];
-        const sobreordenVal = verDefectosSobreorden === 'true' ? 1 : 0;
 
         for (const op of operaciones) {
+            // ✅ VB: Cargar_Grilla_Calidad filtra por Sobreorden de la fila
+            //    pero el VB usa Dr.GetString("Sobreorden") que puede venir como "0", "1", o NULL.
+            //    Para EMB/PLANCHAS, NO filtramos: dejamos que el SP de calidad decida.
+            //    Para SLITTER/HORNO sí respetamos el filtro.
+            const opSobreorden = String(op.Sobreorden ?? '0').trim();
+            if (!esPlanchaMaquina(op.Maquina) && opSobreorden !== String(sobreordenVal)) {
+                continue;
+            }
+
+            // ================= PLANCHA / EMBALAJE =================
+            if (esPlanchaMaquina(op.Maquina)) {
+                try {
+                    // ✅ VB Cargo_Grilla: usa las claves de la MISMA fila
+                    const itemPedidoId = String(op.ItemPedido_ID || '');
+                    const loteIds = String(op.Lote_IDS || '');
+                    const sobrante = parseInt(op.Sobrante || 0);
+
+                    console.log(`🔎 [EMB] op=${op.Operacion_ID} | Maquina=${op.Maquina} | Item=${itemPedidoId} | Lote_IDS=${loteIds} | Sobrante=${sobrante}`);
+
+                    const spData = asRows(await dbRegistracionNET.raw(
+                        `EXEC dbo.SP_TraerCalidadPlanchaT ?,?,?,?,?`,
+                        [op.Operacion_ID, itemPedidoId, sobrante, sobreordenVal, loteIds]));
+
+                    console.log(`   📋 SP_TraerCalidadPlanchaT devolvió ${spData.length} filas`);
+
+                    if (spData.length > 0) {
+                        const primera = spData[0];
+                        const dictamen = parseInt(primera.Dictamen);
+                        const codigo = String(primera.Codigo || '').trim();
+                        // ✅ VB: Dictamen=0 y (Codigo<>'FDI' o FDI en vista SO)
+                        if (dictamen === 0 && (codigo !== 'FDI' || sobreordenVal === 1)) {
+                            operacionesFiltradas.push({
+                                ...op,
+                                ...primera,
+                                Planta: op.Planta || '',
+                                Sobreorden: String(sobreordenVal)
+                            });
+                            console.log(`   ✅ INCLUIDA en listado (Dictamen=${dictamen}, Codigo=${codigo})`);
+                        } else {
+                            console.log(`   ❌ NO incluida (Dictamen=${dictamen}, Codigo=${codigo})`);
+                        }
+                    } else {
+                        console.log(`   ❌ SP no devolvió filas`);
+                    }
+                } catch (e) {
+                    console.error(`Error SP_TraerCalidadPlanchaT op ${op.Operacion_ID}:`, e.message);
+                }
+                continue;
+            }
+
+            // ================= HORNOS / SLITTER =================
             let spName = '';
             let params = [];
-
-            if (op.Maquina === 'PL1' || op.Maquina === 'PL2' || op.Maquina === 'PL3' || op.Maquina === 'EMB') {
-                spName = 'dbo.SP_TraerCalidadPlanchaT';
-                params = [op.Operacion_ID, op.ItemPedido_ID || op.Origen_Lote_ID || '', op.Sobrante || 0, sobreordenVal, op.Lote_IDS || op.ID_LotePlancha || ''];
-            } else if (op.Maquina === 'HOR') {
+            if (op.Maquina === 'HOR') {
                 spName = 'dbo.SP_TraerCalidadHorno';
-                params = [op.Operacion_ID, op.Lote_IDS || '', 0];
+                params = [op.Operacion_ID, String(op.Lote_IDS || ''), 0];
             } else {
                 spName = 'dbo.SP_TraerCalidad';
-                params = [op.Operacion_ID, op.Lote_IDS || '', op.Sobrante || 0, sobreordenVal];
+                params = [op.Operacion_ID, String(op.Lote_IDS || ''), parseInt(op.Sobrante || 0), sobreordenVal];
             }
 
             try {
@@ -1031,13 +1192,11 @@ const getOperacionesPendientesCalidad = async (req, res) => {
                 const operacionConCalidad = spData.find(row => parseInt(row.Dictamen) === 0);
 
                 if (operacionConCalidad) {
-                    // ✅✅ Planta se fija DESPUÉS del spread: los SPs de defectos no la traen
-                    //    y no queremos que un undefined la pise.
                     operacionesFiltradas.push({
                         ...op,
                         ...operacionConCalidad,
                         Planta: op.Planta || '',
-                        Sobreorden: sobreordenVal.toString()
+                        Sobreorden: String(sobreordenVal)
                     });
                 }
             } catch (spError) {
@@ -1046,22 +1205,18 @@ const getOperacionesPendientesCalidad = async (req, res) => {
         }
 
         const operacionesFormateadas = operacionesFiltradas.map(op => {
-            const maquina = op.Maquina;
             const sobrante = parseInt(op.Sobrante || 0);
-            const esPlancha = (maquina === 'PL1' || maquina === 'PL2' || maquina === 'PL3' || maquina === 'EMB');
+            const esPlancha = esPlanchaMaquina(op.Maquina);
 
             let kilosCalidad = parseFloat(op.Kilos_Calidad || 0);
-            let kilosSobreOrden = parseFloat(op.Kilos_Sobreorden || op.Kilos_SobreOrden || 0);
+            let kilosSobreOrden = parseFloat(op.Kilos_Sobreorden || op.Kilos_Sobreorden || 0);
             let kilosBrutos = parseFloat(op.KilosBrutos || 0);
 
             if (esPlancha && sobrante === 0) {
                 kilosCalidad = kilosSobreOrden;
                 kilosSobreOrden = 0;
             }
-
-            if (!esPlancha) {
-                kilosBrutos = 0;
-            }
+            if (!esPlancha) kilosBrutos = 0;
 
             return {
                 Maquina: op.Maquina,
@@ -1078,17 +1233,18 @@ const getOperacionesPendientesCalidad = async (req, res) => {
                 Sobrante: sobrante,
                 Operacion_ID: op.Operacion_ID,
                 Codigo_Producto: op.Codigo_Producto,
-                Planta: op.Planta || ''   // ✅ NUEVO: 'Spegazzini' / 'Valentín Alsina' (SP 2026-10-21)
+                Planta: op.Planta || ''
             };
         });
 
-        console.log(`🏭 Pendientes calidad: ${operacionesFormateadas.length} ops | Planta 1ra: "${operacionesFormateadas[0]?.Planta ?? ''}"`);
+        console.log(`🏭 Pendientes calidad: ${operacionesFormateadas.length} ops`);
         res.status(200).json(operacionesFormateadas);
     } catch (error) {
         console.error("❌ Error en getOperacionesPendientesCalidad:", error);
         res.status(500).json({ error: error.message });
     }
 };
+
 
 
 // ============================================================================
@@ -1181,87 +1337,6 @@ const insertarDefectoCalidadPlancha = async (trx, d, ctx) => {
         await trx.raw(sqlBase, values);
     }
 };
-
-
-
-
-
-// // Guardar defectos de calidad (PLANCHAS / EMBALAJE)
-// const guardarCalidad = async (req, res) => {
-//     const { operacionId, itemPedidoId, numeroItem, sobrante, lineaData, defectos, usuario } = req.body;
-//     const transaction = await dbRegistracionNET.transaction();
-//     try {
-//         const fechaReg = new Date().toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
-
-//         const idLotePlancha  = lineaData?.Lote_IDS || lineaData?.ID_LotePlancha || '';
-//         const loteIDEntrante = lineaData?.Origen_Lote_ID || lineaData?.LoteID || '';
-//         const numeroItemInt  = parseInt(numeroItem) || 0;
-//         const numeroPedido   = lineaData?.NumeroPedido || '';
-//         const familia        = String(lineaData?.CodigoProducto || '').substring(8, 10) || 'HO';
-//         // ✅✅ @Serie_Lote: serie/lote DEL PAQUETE (11 chars, misma convención que las grillas)
-//         const serieLote = String(
-//             lineaData?.SerieLotePaquete || lineaData?.LotePlanchaDesc || lineaData?.SerieLote || lineaData?.Destino_Lote || ''
-//         ).substring(0, 11);
-
-//         // 0) PURGA de pendientes huérfanos a nivel item (anti-acumulación; el 🗑️ del modal sincroniza de verdad)
-//         try {
-//             await transaction.raw(
-//                 `DELETE FROM CalidadPlancha
-//                  WHERE Operacion_ID = ? AND ItemPedido_ID = ? AND NumeroItem = ? AND Sobrante = 0 AND Dictamen = 0`,
-//                 [operacionId, itemPedidoId || '', numeroItemInt]);
-//         } catch (e) { console.warn('⚠️ purge pendientes CalidadPlancha:', e.message); }
-
-//         // 1) Elimino defectos existentes del lote (SP oficial, 5 params con @ID_LotePlancha)
-//         await transaction.raw(
-//             "EXEC SP_EliminarCalidadPlancha @Operacion_ID=?, @ItemPedido_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?",
-//             [operacionId, itemPedidoId || '', numeroItemInt, sobrante || 0, idLotePlancha]
-//         );
-
-//         // 2) Marco la línea como "en calidad"
-//         await transaction.raw(
-//             "EXEC SP_EditarAtadosRegistradosPlanchaCalidad @Operacion_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?, @Calidad=?",
-//             [operacionId, numeroItemInt, sobrante || 0, idLotePlancha, 1]
-//         );
-
-//         // 3) Inserto cada defecto — 16 params (el #16 es @Serie_Lote, el que faltaba)
-//         for (const d of defectos) {
-//             await transaction.raw(
-//                 `EXEC SP_InsertarCalidadPlancha 
-//                  @Operacion_ID=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?, 
-//                  @Nota=?, @Lote_ID=?, @Sobrante=?, @ItemPedido_ID=?, @NumeroItem=?, 
-//                  @NumeroPedido=?, @Sobreorden=?, @ID_LotePlancha=?, @Usuario=?, @FechaReg=?, @Serie_Lote=?`,
-//                 [
-//                     operacionId,          // @Operacion_ID
-//                     familia,              // @Familia
-//                     d.codDefecto,         // @Codigo
-//                     String(d.codGravedad),// @Gravedad
-//                     String(d.codUbicacion),// @Ubicacion
-//                     d.nota || '',         // @Nota
-//                     loteIDEntrante,       // @Lote_ID (lote entrante)
-//                     sobrante || 0,        // @Sobrante
-//                     itemPedidoId || '',   // @ItemPedido_ID (item de la línea)
-//                     numeroItemInt,        // @NumeroItem
-//                     numeroPedido,         // @NumeroPedido
-//                     0,                    // @Sobreorden (calidad normal)
-//                     idLotePlancha,        // @ID_LotePlancha (lote del paquete)
-//                     usuario || 'pmorrone',// @Usuario
-//                     fechaReg,             // @FechaReg
-//                     serieLote             // ✅ @Serie_Lote  ← EL QUE FALTABA
-//                 ]
-//             );
-//         }
-
-//         await transaction.commit();
-//         res.json({ success: true, message: 'Defectos guardados correctamente' });
-//     } catch (error) {
-//         await transaction.rollback();
-//         console.error('Error al guardar calidad (Embalaje/Plancha):', error);
-//         res.status(500).json({ error: error.message });
-//     }
-// };
-
-
-
 
 
 

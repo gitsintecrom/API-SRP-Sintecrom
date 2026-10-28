@@ -5571,32 +5571,744 @@ const resetearPaquetesEmbalaje = async (req, res) => {
 
 
 
+// const registrarPaquetesEmbalaje = async (req, res) => {
+//     const { operacionId, itemPedidoId, loteIds, sobrante, atados, lineaData, usuario } = req.body;
+//     console.log('🟢 registrarPaquetesEmbalaje');
+//     console.log('   operacionId:', operacionId, '| itemPedidoId(línea):', itemPedidoId);
+//     try {
+//         const transaction = await dbRegistracionNET.transaction();
+//         try {
+//             const [opInfo] = await transaction.raw(
+//                 `SELECT Maquina, NroBatch, Codigo_Producto, Origen_Lote, Origen_Lote_ID, 
+//                         Operacion_Cuchillas, Nro_Matching, Tarea, KilosProgramadosEntrantes,
+//                         ItemPedido_ID
+//                  FROM OperacionesCalipso 
+//                  WHERE Operacion_ID = ?`,
+//                 [operacionId]
+//             );
+//             if (!opInfo) throw new Error("No se encontró información de la operación en OperacionesCalipso");
+
+//             // ✅✅ FIX 1: el ItemPedido_ID que se guarda es el de la LÍNEA (como el VB: Inicial.sPedidoID),
+//             //    no el de la operación. Así Registracion y CalidadPlancha comparten la clave
+//             //    y SP_TraerCalidadPlanchaT (listado de Calidad) los encuentra.
+//             const itemPedidoFinal = lineaData?.ItemPedido_ID || itemPedidoId || lineaData?.PedidoID || opInfo.ItemPedido_ID;
+
+//             const paquetesPorLote = {};
+//             for (const paquete of atados) {
+//                 const idLotePlancha = paquete.idLotePlancha || opInfo.Origen_Lote_ID || loteIds;
+//                 const serieLote = paquete.serieLote || opInfo.Origen_Lote || lineaData?.SerieLote || '';
+//                 if (!paquetesPorLote[idLotePlancha]) {
+//                     paquetesPorLote[idLotePlancha] = {
+//                         idLotePlancha, serieLote, paquetes: [],
+//                         totalSobreOrden: 0, totalCalidad: 0, totalBruto: 0,
+//                         totalAtados: 0, totalRollos: 0,
+//                         hayCalidadPendiente: false
+//                     };
+//                 }
+//                 const peso = parseFloat(paquete.peso) || 0;
+//                 const kilosBruto = parseFloat(paquete.kilosBruto) || peso;
+//                 paquetesPorLote[idLotePlancha].paquetes.push(paquete);
+
+//                 // ✅✅ FIX 2 (convención VB): los kilos de un paquete EN CALIDAD PENDIENTE
+//                 //    viven en Kilos_Sobreorden; ACalidad='1' + la fila de CalidadPlancha
+//                 //    (Dictamen=0) son los que marcan "en calidad". El dictamen después
+//                 //    los deja en SO (aprobado) o los pasa a Kilos_Calidad (rechazado).
+//                 paquetesPorLote[idLotePlancha].totalSobreOrden += peso;
+//                 if (paquete.esCalidad) paquetesPorLote[idLotePlancha].hayCalidadPendiente = true;
+
+//                 paquetesPorLote[idLotePlancha].totalBruto += kilosBruto;
+//                 paquetesPorLote[idLotePlancha].totalAtados += 1;
+//                 paquetesPorLote[idLotePlancha].totalRollos += parseInt(paquete.rollos) || 0;
+//             }
+
+//             for (const idLotePlancha of Object.keys(paquetesPorLote)) {
+//                 await transaction.raw(
+//                     `DELETE FROM AtadosPlancha WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
+//                     [operacionId, sobrante || 0, idLotePlancha]);
+//                 await transaction.raw(
+//                     `DELETE FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
+//                     [operacionId, sobrante || 0, idLotePlancha]);
+//             }
+
+//             for (const [idLotePlancha, datosLote] of Object.entries(paquetesPorLote)) {
+//                 for (let i = 0; i < datosLote.paquetes.length; i++) {
+//                     const paquete = datosLote.paquetes[i];
+//                     await transaction.raw(
+//                         `EXEC SP_InsertarAtadosPlancha 
+//                          @Operacion_ID=?, @NumeroItem=?, @Atado=?, @Rollos=?,
+//                          @Sobrante=?, @Peso=?, @Calidad=?, @ID_LotePlancha=?, @Etiqueta=?`,
+//                         [
+//                             operacionId,
+//                             String(parseInt(lineaData?.NumeroItem) || 1),
+//                             parseInt(paquete.atado) || (i + 1),
+//                             parseInt(paquete.rollos) || 0,
+//                             sobrante || 0,
+//                             paquete.peso,
+//                             paquete.esCalidad ? 1 : 0,
+//                             idLotePlancha,
+//                             parseInt(paquete.nroEtiqueta) || 0
+//                         ]);
+//                 }
+
+//                 await transaction.raw(
+//                     `EXEC SP_InsertarRegistracionPlancha 
+//                      @Operacion_ID=?, @Tarea=?, @Maquina=?, @NroBatch=?, @Cuchillas=?,
+//                      @CodProducto=?, @CodProductoS=?, @Lote_ID=?, @KilosProgramados=?,
+//                      @KilosSobreOrden=?, @KilosCalidad=?, @Estado=?, @Sobrante=?,
+//                      @ACalidad=?, @LotePlanchaDesc=?, @Nro_Matching=?, @ItemPedido_ID=?,
+//                      @NumeroItem=?, @Kilos_Bruto=?, @ACalidadSO=?, @Atados=?, @Rollos=?,
+//                      @ID_LotePlancha=?, @CodSerie=?, @CodLote=?, @Usuario=?, @FechaReg=?,
+//                      @RetornaStock=?`,
+//                     [
+//                         operacionId,
+//                         opInfo.Tarea || 'Embalaje',
+//                         opInfo.Maquina || '',
+//                         opInfo.NroBatch || '',
+//                         opInfo.Operacion_Cuchillas || '',
+//                         opInfo.Codigo_Producto || '',
+//                         '',
+//                         opInfo.Origen_Lote_ID || '',
+//                         parseFloat(opInfo.KilosProgramadosEntrantes) || 0,
+//                         datosLote.totalSobreOrden,                 // ✅ incluye kilos de calidad pendiente (VB)
+//                         0,                                         // ✅ KilosCalidad=0 hasta el dictamen (VB)
+//                         '1',
+//                         sobrante || 0,
+//                         datosLote.hayCalidadPendiente ? '1' : '0', // ✅ ACalidad marca "en calidad"
+//                         datosLote.serieLote,
+//                         opInfo.Nro_Matching || '',
+//                         itemPedidoFinal,                           // ✅ FIX 1: item de la línea
+//                         parseInt(lineaData?.NumeroItem) || 1,
+//                         datosLote.totalBruto,
+//                         '0',
+//                         datosLote.totalAtados,
+//                         datosLote.totalRollos,
+//                         idLotePlancha,
+//                         '',
+//                         '',
+//                         usuario || 'sistema',
+//                         new Date(),
+//                         'N'
+//                     ]);
+//             }
+
+//             await transaction.commit();
+//             res.status(200).json({ message: 'Paquetes registrados correctamente' });
+//         } catch (error) {
+//             await transaction.rollback();
+//             throw error;
+//         }
+//     } catch (error) {
+//         console.error('❌ Error registrarPaquetesEmbalaje:', error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// const registrarPaquetesEmbalaje = async (req, res) => {
+//     const { operacionId, itemPedidoId, loteIds, sobrante, atados, lineaData, usuario } = req.body;
+//     console.log('🟢 registrarPaquetesEmbalaje');
+//     console.log('   operacionId:', operacionId, '| itemPedidoId(línea):', itemPedidoId);
+//     try {
+//         const transaction = await dbRegistracionNET.transaction();
+//         try {
+//             const [opInfo] = await transaction.raw(
+//                 `SELECT Maquina, NroBatch, Codigo_Producto, Origen_Lote, Origen_Lote_ID,
+//                         Operacion_Cuchillas, Nro_Matching, Tarea, KilosProgramadosEntrantes, ItemPedido_ID
+//                  FROM OperacionesCalipso WHERE Operacion_ID = ?`,
+//                 [operacionId]
+//             );
+//             if (!opInfo) throw new Error("No se encontró información de la operación en OperacionesCalipso");
+
+//             const itemPedidoFinal = lineaData?.ItemPedido_ID || itemPedidoId || lineaData?.PedidoID || opInfo.ItemPedido_ID;
+//             const numeroItemInt = parseInt(lineaData?.NumeroItem) || 1;
+
+//             const paquetesPorLote = {};
+//             for (const paquete of atados) {
+//                 const idLotePlancha = paquete.idLotePlancha || opInfo.Origen_Lote_ID || loteIds;
+//                 const serieLote = paquete.serieLote || opInfo.Origen_Lote || lineaData?.SerieLote || '';
+//                 if (!paquetesPorLote[idLotePlancha]) {
+//                     paquetesPorLote[idLotePlancha] = {
+//                         idLotePlancha, serieLote, paquetes: [],
+//                         totalSobreOrden: 0, totalCalidad: 0, totalBruto: 0,
+//                         totalAtados: 0, totalRollos: 0,
+//                         hayCalidadPendiente: false
+//                     };
+//                 }
+//                 const peso = parseFloat(paquete.peso) || 0;
+//                 const kilosBruto = parseFloat(paquete.kilosBruto) || peso;
+//                 paquetesPorLote[idLotePlancha].paquetes.push(paquete);
+//                 paquetesPorLote[idLotePlancha].totalSobreOrden += peso;
+//                 if (paquete.esCalidad) paquetesPorLote[idLotePlancha].hayCalidadPendiente = true;
+//                 paquetesPorLote[idLotePlancha].totalBruto += kilosBruto;
+//                 paquetesPorLote[idLotePlancha].totalAtados += 1;
+//                 paquetesPorLote[idLotePlancha].totalRollos += parseInt(paquete.rollos) || 0;
+//             }
+
+//             for (const idLotePlancha of Object.keys(paquetesPorLote)) {
+//                 await transaction.raw(
+//                     `DELETE FROM AtadosPlancha WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
+//                     [operacionId, sobrante || 0, idLotePlancha]);
+//                 await transaction.raw(
+//                     `DELETE FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
+//                     [operacionId, sobrante || 0, idLotePlancha]);
+//             }
+
+//             for (const [idLotePlancha, datosLote] of Object.entries(paquetesPorLote)) {
+//                 for (let i = 0; i < datosLote.paquetes.length; i++) {
+//                     const paquete = datosLote.paquetes[i];
+//                     await transaction.raw(
+//                         `EXEC SP_InsertarAtadosPlancha
+//                          @Operacion_ID=?, @NumeroItem=?, @Atado=?, @Rollos=?,
+//                          @Sobrante=?, @Peso=?, @Calidad=?, @ID_LotePlancha=?, @Etiqueta=?`,
+//                         [
+//                             operacionId,
+//                             String(numeroItemInt),
+//                             parseInt(paquete.atado) || (i + 1),
+//                             parseInt(paquete.rollos) || 0,
+//                             sobrante || 0,
+//                             paquete.peso,
+//                             paquete.esCalidad ? 1 : 0,
+//                             idLotePlancha,
+//                             parseInt(paquete.nroEtiqueta) || 0
+//                         ]);
+//                 }
+
+//                 await transaction.raw(
+//                     `EXEC SP_InsertarRegistracionPlancha
+//                      @Operacion_ID=?, @Tarea=?, @Maquina=?, @NroBatch=?, @Cuchillas=?,
+//                      @CodProducto=?, @CodProductoS=?, @Lote_ID=?, @KilosProgramados=?,
+//                      @KilosSobreOrden=?, @KilosCalidad=?, @Estado=?, @Sobrante=?,
+//                      @ACalidad=?, @LotePlanchaDesc=?, @Nro_Matching=?, @ItemPedido_ID=?,
+//                      @NumeroItem=?, @Kilos_Bruto=?, @ACalidadSO=?, @Atados=?, @Rollos=?,
+//                      @ID_LotePlancha=?, @CodSerie=?, @CodLote=?, @Usuario=?, @FechaReg=?,
+//                      @RetornaStock=?`,
+//                     [
+//                         operacionId,
+//                         opInfo.Tarea || 'Embalaje',
+//                         opInfo.Maquina || '',
+//                         opInfo.NroBatch || '',
+//                         opInfo.Operacion_Cuchillas || '',
+//                         opInfo.Codigo_Producto || '',
+//                         '',
+//                         opInfo.Origen_Lote_ID || '',
+//                         parseFloat(opInfo.KilosProgramadosEntrantes) || 0,
+//                         datosLote.totalSobreOrden,
+//                         0,
+//                         '1',
+//                         sobrante || 0,
+//                         datosLote.hayCalidadPendiente ? '1' : '0',
+//                         datosLote.serieLote,
+//                         opInfo.Nro_Matching || '',
+//                         itemPedidoFinal,
+//                         numeroItemInt,
+//                         datosLote.totalBruto,
+//                         '0',
+//                         datosLote.totalAtados,
+//                         datosLote.totalRollos,
+//                         idLotePlancha,
+//                         '',
+//                         '',
+//                         usuario || 'sistema',
+//                         new Date(),
+//                         'N'
+//                     ]);
+
+//                 // ✅✅ PARIDAD SLITTER (el truco de guardarCalidadSlitter): el listado joinea
+//                 //    RegistracionUltimaOperacion con CalidadFinal TAMBIÉN por Lote_ID.
+//                 //    El registro guarda Lote_ID = Origen_Lote_ID (entrante, como Inicial.sLoteID del VB),
+//                 //    pero el modal de calidad pudo grabar CalidadFinal.Lote_ID = lote del paquete.
+//                 //    Sin este UPDATE el join no matchea y la operación NO aparece en Calidad.
+//                 await transaction.raw(
+//                     `UPDATE dbo.CalidadFinal SET Lote_ID = ?
+//                      WHERE Operacion_ID = ? AND ItemPedido_ID = ? AND NumeroItem = ? AND Sobrante = ?
+//                        AND ID_LotePlancha = ? AND (Dictamen IS NULL OR Dictamen = 0)`,
+//                     [opInfo.Origen_Lote_ID || '', operacionId, itemPedidoFinal || '', numeroItemInt, sobrante || 0, idLotePlancha]);
+
+//                 // ✅ VB frmCalidad.btnConfirma: marca los atados del paquete como "en calidad"
+//                 //    (ahora sí existen, porque el registro se acaba de insertar)
+//                 if (datosLote.hayCalidadPendiente) {
+//                     await transaction.raw(
+//                         `EXEC SP_EditarAtadosRegistradosPlanchaCalidad @Operacion_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?, @Calidad=?`,
+//                         [operacionId, numeroItemInt, sobrante || 0, idLotePlancha, 1]);
+//                 }
+//             }
+
+//             await transaction.commit();
+//             console.log('✅ registrarPaquetesEmbalaje COMMIT OK (CalidadFinal.Lote_ID alineado)');
+//             res.status(200).json({ message: 'Paquetes registrados correctamente' });
+//         } catch (error) {
+//             await transaction.rollback();
+//             throw error;
+//         }
+//     } catch (error) {
+//         console.error('❌ Error registrarPaquetesEmbalaje:', error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ✅ Helper: detecta si SP_InsertarCalidadPlancha tiene @Serie_Lote (cacheado)
+let _spCalPlanchaConSerie = null;
+const spCalidadPlanchaConSerie = async (trx) => {
+    if (_spCalPlanchaConSerie !== null) return _spCalPlanchaConSerie;
+    try {
+        const r = await trx.raw(
+            `SELECT name FROM sys.parameters
+             WHERE object_id = OBJECT_ID('dbo.SP_InsertarCalidadPlancha')
+             ORDER BY parameter_id`);
+        const rows = Array.isArray(r) ? r : (r[0] || []);
+        _spCalPlanchaConSerie = rows.some(x => String(x.name).toLowerCase() === '@serie_lote');
+    } catch (e) { _spCalPlanchaConSerie = false; }
+    return _spCalPlanchaConSerie;
+};
+
+// ============================================================================
+// ✅✅ v3: REGISTRO DE PAQUETES EMB + CALIDAD EN LA MISMA TRANSACCIÓN
+//    Réplica del orden VB: primero existe el registro (RegistracionUltimaOperacion +
+//    AtadosPlancha) y DESPUÉS se graban los defectos en CalidadFinal con las claves
+//    exactas del join de SP_TraerOperacionesCalidad:
+//       Lote_ID       = lote ENTRANTE (VB: Inicial.sLoteID = Origen_Lote_ID)
+//       ID_LotePlancha = lote del paquete (VB: Inicial.sLoteIDPlancha)
+//       ItemPedido_ID  = ítem de la línea (VB: Inicial.sPedidoID)
+//    Si el front no manda defectos (re-registro), AUTO-REPARA las filas pendientes
+//    existentes re-grabándolas con las claves correctas.
+// ============================================================================
+// const registrarPaquetesEmbalaje = async (req, res) => {
+//     const { operacionId, itemPedidoId, loteIds, sobrante, atados, lineaData, usuario } = req.body;
+//     console.log('🟢 registrarPaquetesEmbalaje v3 | op:', operacionId);
+//     try {
+//         const transaction = await dbRegistracionNET.transaction();
+//         try {
+//             const [opInfo] = await transaction.raw(
+//                 `SELECT Maquina, NroBatch, Codigo_Producto, Origen_Lote, Origen_Lote_ID,
+//                         Operacion_Cuchillas, Nro_Matching, Tarea, KilosProgramadosEntrantes,
+//                         ItemPedido_ID, NumeroPedido
+//                  FROM OperacionesCalipso WHERE Operacion_ID = ?`, [operacionId]);
+//             if (!opInfo) throw new Error("No se encontró información de la operación en OperacionesCalipso");
+
+//             const itemPedidoFinal = lineaData?.ItemPedido_ID || itemPedidoId || lineaData?.PedidoID || opInfo.ItemPedido_ID;
+//             const numeroItemInt = parseInt(lineaData?.NumeroItem) || 1;
+//             const familia = String(opInfo.Codigo_Producto || '').substring(8, 10) || 'HO';
+//             const fechaReg = new Date().toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
+
+//             // ---------- agrupar paquetes por lote ----------
+//             const paquetesPorLote = {};
+//             for (const paquete of atados) {
+//                 const idLotePlancha = paquete.idLotePlancha || opInfo.Origen_Lote_ID || loteIds;
+//                 const serieLote = paquete.serieLote || opInfo.Origen_Lote || lineaData?.SerieLote || '';
+//                 if (!paquetesPorLote[idLotePlancha]) {
+//                     paquetesPorLote[idLotePlancha] = {
+//                         idLotePlancha, serieLote, paquetes: [],
+//                         totalSobreOrden: 0, totalBruto: 0, totalAtados: 0, totalRollos: 0,
+//                         hayCalidadPendiente: false, defectos: null
+//                     };
+//                 }
+//                 const peso = parseFloat(paquete.peso) || 0;
+//                 paquetesPorLote[idLotePlancha].paquetes.push(paquete);
+//                 paquetesPorLote[idLotePlancha].totalSobreOrden += peso;   // convención VB
+//                 if (paquete.esCalidad) {
+//                     paquetesPorLote[idLotePlancha].hayCalidadPendiente = true;
+//                     if (!paquetesPorLote[idLotePlancha].defectos && Array.isArray(paquete.defectos) && paquete.defectos.length) {
+//                         paquetesPorLote[idLotePlancha].defectos = paquete.defectos;
+//                     }
+//                 }
+//                 paquetesPorLote[idLotePlancha].totalBruto += parseFloat(paquete.kilosBruto) || peso;
+//                 paquetesPorLote[idLotePlancha].totalAtados += 1;
+//                 paquetesPorLote[idLotePlancha].totalRollos += parseInt(paquete.rollos) || 0;
+//             }
+
+//             // ---------- ¿el lote YA estaba marcado en calidad en la BD? (re-registros) ----------
+//             for (const idLotePlancha of Object.keys(paquetesPorLote)) {
+//                 const marcados = asArray(await transaction.raw(
+//                     `SELECT TOP 1 1 AS X FROM AtadosPlancha
+//                      WHERE Operacion_ID=? AND Sobrante=? AND ID_LotePlancha=? AND Calidad=1`,
+//                     [operacionId, sobrante || 0, idLotePlancha]));
+//                 if (marcados.length) paquetesPorLote[idLotePlancha].hayCalidadPendiente = true;
+//             }
+
+//             // ---------- limpieza de lotes a procesar ----------
+//             for (const idLotePlancha of Object.keys(paquetesPorLote)) {
+//                 await transaction.raw(
+//                     `DELETE FROM AtadosPlancha WHERE Operacion_ID=? AND Sobrante=? AND ID_LotePlancha=?`,
+//                     [operacionId, sobrante || 0, idLotePlancha]);
+//                 await transaction.raw(
+//                     `DELETE FROM RegistracionUltimaOperacion WHERE Operacion_ID=? AND Sobrante=? AND ID_LotePlancha=?`,
+//                     [operacionId, sobrante || 0, idLotePlancha]);
+//             }
+
+//             const conSerie = await spCalidadPlanchaConSerie(transaction);
+
+//             // ---------- insert por lote: atados + registro + calidad ----------
+//             for (const [idLotePlancha, datosLote] of Object.entries(paquetesPorLote)) {
+//                 for (let i = 0; i < datosLote.paquetes.length; i++) {
+//                     const paquete = datosLote.paquetes[i];
+//                     await transaction.raw(
+//                         `EXEC SP_InsertarAtadosPlancha
+//                          @Operacion_ID=?, @NumeroItem=?, @Atado=?, @Rollos=?,
+//                          @Sobrante=?, @Peso=?, @Calidad=?, @ID_LotePlancha=?, @Etiqueta=?`,
+//                         [operacionId, String(numeroItemInt), parseInt(paquete.atado) || (i + 1),
+//                          parseInt(paquete.rollos) || 0, sobrante || 0, paquete.peso,
+//                          paquete.esCalidad ? 1 : 0, idLotePlancha, parseInt(paquete.nroEtiqueta) || 0]);
+//                 }
+
+//                 await transaction.raw(
+//                     `EXEC SP_InsertarRegistracionPlancha
+//                      @Operacion_ID=?, @Tarea=?, @Maquina=?, @NroBatch=?, @Cuchillas=?,
+//                      @CodProducto=?, @CodProductoS=?, @Lote_ID=?, @KilosProgramados=?,
+//                      @KilosSobreOrden=?, @KilosCalidad=?, @Estado=?, @Sobrante=?,
+//                      @ACalidad=?, @LotePlanchaDesc=?, @Nro_Matching=?, @ItemPedido_ID=?,
+//                      @NumeroItem=?, @Kilos_Bruto=?, @ACalidadSO=?, @Atados=?, @Rollos=?,
+//                      @ID_LotePlancha=?, @CodSerie=?, @CodLote=?, @Usuario=?, @FechaReg=?,
+//                      @RetornaStock=?`,
+//                     [operacionId, opInfo.Tarea || 'Embalaje', opInfo.Maquina || '', opInfo.NroBatch || '',
+//                      opInfo.Operacion_Cuchillas || '', opInfo.Codigo_Producto || '', '',
+//                      opInfo.Origen_Lote_ID || '', parseFloat(opInfo.KilosProgramadosEntrantes) || 0,
+//                      datosLote.totalSobreOrden, 0, '1', sobrante || 0,
+//                      datosLote.hayCalidadPendiente ? '1' : '0', datosLote.serieLote,
+//                      opInfo.Nro_Matching || '', itemPedidoFinal, numeroItemInt, datosLote.totalBruto,
+//                      '0', datosLote.totalAtados, datosLote.totalRollos, idLotePlancha, '', '',
+//                      usuario || 'sistema', new Date(), 'N']);
+
+//                 // ✅✅ CALIDAD dentro de la misma transacción (VB: frmCalidad.btnConfirma)
+//                 if (datosLote.hayCalidadPendiente) {
+//                     // a) pendientes actuales del lote → auto-reparación en re-registros
+//                     const prev = asArray(await transaction.raw(
+//                         `SELECT Codigo, Gravedad, Ubicacion, Nota FROM dbo.CalidadFinal
+//                          WHERE Operacion_ID=? AND ItemPedido_ID=? AND NumeroItem=? AND Sobrante=? AND ID_LotePlancha=?
+//                            AND (Dictamen IS NULL OR Dictamen=0)`,
+//                         [operacionId, itemPedidoFinal || '', numeroItemInt, sobrante || 0, idLotePlancha]));
+
+//                     let defs = datosLote.defectos;
+//                     if (!defs || defs.length === 0) {
+//                         defs = prev.map(r => ({
+//                             codDefecto: r.Codigo, codGravedad: String(r.Gravedad),
+//                             codUbicacion: String(r.Ubicacion), nota: r.Nota || ''
+//                         }));
+//                     }
+
+//                     // b) purga de pendientes del lote + re-insert con claves EXACTAS
+//                     await transaction.raw(
+//                         `DELETE FROM dbo.CalidadFinal
+//                          WHERE Operacion_ID=? AND ItemPedido_ID=? AND NumeroItem=? AND Sobrante=? AND ID_LotePlancha=?
+//                            AND (Dictamen IS NULL OR Dictamen=0)`,
+//                         [operacionId, itemPedidoFinal || '', numeroItemInt, sobrante || 0, idLotePlancha]);
+
+//                     const sqlBase = `EXEC SP_InsertarCalidadPlancha
+//                          @Operacion_ID=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?,
+//                          @Nota=?, @Lote_ID=?, @Sobrante=?, @ItemPedido_ID=?, @NumeroItem=?,
+//                          @NumeroPedido=?, @Sobreorden=?, @ID_LotePlancha=?, @Usuario=?, @FechaReg=?`;
+//                     for (const d of defs) {
+//                         const vals = [
+//                             operacionId, familia, d.codDefecto,
+//                             String(d.codGravedad ?? '0'), String(d.codUbicacion ?? '0'), d.nota || '',
+//                             opInfo.Origen_Lote_ID || '',        // ✅ VB: Inicial.sLoteID (entrante)
+//                             sobrante || 0, itemPedidoFinal || '', numeroItemInt,
+//                             String(opInfo.NumeroPedido || lineaData?.NumeroPedido || ''),
+//                             0, idLotePlancha, usuario || 'sistema', fechaReg
+//                         ];
+//                         if (conSerie) {
+//                             await transaction.raw(`${sqlBase}, @Serie_Lote=?`, [...vals, String(datosLote.serieLote || '').substring(0, 11)]);
+//                         } else {
+//                             await transaction.raw(sqlBase, vals);
+//                         }
+//                     }
+
+//                     // c) atados marcados "en calidad" (ahora que existen, como el VB)
+//                     await transaction.raw(
+//                         `EXEC SP_EditarAtadosRegistradosPlanchaCalidad @Operacion_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?, @Calidad=?`,
+//                         [operacionId, numeroItemInt, sobrante || 0, idLotePlancha, 1]);
+
+//                     console.log(`✅ [EMB-Calidad] lote=${idLotePlancha} | defectos grabados=${defs.length} | Lote_ID=${opInfo.Origen_Lote_ID}`);
+//                 }
+//             }
+
+//             await transaction.commit();
+//             console.log('✅ registrarPaquetesEmbalaje v3 COMMIT OK');
+//             res.status(200).json({ message: 'Paquetes registrados correctamente' });
+//         } catch (error) {
+//             await transaction.rollback();
+//             throw error;
+//         }
+//     } catch (error) {
+//         console.error('❌ Error registrarPaquetesEmbalaje:', error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// const registrarPaquetesEmbalaje = async (req, res) => {
+//     const { operacionId, itemPedidoId, loteIds, sobrante, atados, lineaData, usuario } = req.body;
+//     console.log('🟢 registrarPaquetesEmbalaje');
+//     console.log('   operacionId:', operacionId, '| itemPedidoId(línea):', itemPedidoId);
+//     try {
+//         const transaction = await dbRegistracionNET.transaction();
+//         try {
+//             const [opInfo] = await transaction.raw(
+//                 `SELECT Maquina, NroBatch, Codigo_Producto, Origen_Lote, Origen_Lote_ID, Operacion_Cuchillas, Nro_Matching, Tarea, KilosProgramadosEntrantes, ItemPedido_ID FROM OperacionesCalipso WHERE Operacion_ID = ?`,
+//                 [operacionId]
+//             );
+//             if (!opInfo) throw new Error("No se encontró información de la operación en OperacionesCalipso");
+
+//             const itemPedidoFinal = lineaData?.ItemPedido_ID || itemPedidoId || lineaData?.PedidoID || opInfo.ItemPedido_ID;
+//             const numeroItemInt = parseInt(lineaData?.NumeroItem) || 1;
+
+//             const paquetesPorLote = {};
+//             for (const paquete of atados) {
+//                 const idLotePlancha = paquete.idLotePlancha || opInfo.Origen_Lote_ID || loteIds;
+//                 const serieLote = paquete.serieLote || opInfo.Origen_Lote || lineaData?.SerieLote || '';
+//                 if (!paquetesPorLote[idLotePlancha]) {
+//                     paquetesPorLote[idLotePlancha] = {
+//                         idLotePlancha, serieLote, paquetes: [],
+//                         totalSobreOrden: 0, totalCalidad: 0, totalBruto: 0,
+//                         totalAtados: 0, totalRollos: 0,
+//                         hayCalidadPendiente: false
+//                     };
+//                 }
+//                 const peso = parseFloat(paquete.peso) || 0;
+//                 const kilosBruto = parseFloat(paquete.kilosBruto) || peso;
+//                 paquetesPorLote[idLotePlancha].paquetes.push(paquete);
+//                 paquetesPorLote[idLotePlancha].totalSobreOrden += peso;
+//                 if (paquete.esCalidad) paquetesPorLote[idLotePlancha].hayCalidadPendiente = true;
+//                 paquetesPorLote[idLotePlancha].totalBruto += kilosBruto;
+//                 paquetesPorLote[idLotePlancha].totalAtados += 1;
+//                 paquetesPorLote[idLotePlancha].totalRollos += parseInt(paquete.rollos) || 0;
+//             }
+
+//             for (const idLotePlancha of Object.keys(paquetesPorLote)) {
+//                 await transaction.raw(
+//                     `DELETE FROM AtadosPlancha WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
+//                     [operacionId, sobrante || 0, idLotePlancha]);
+//                 await transaction.raw(
+//                     `DELETE FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
+//                     [operacionId, sobrante || 0, idLotePlancha]);
+//             }
+
+//             for (const [idLotePlancha, datosLote] of Object.entries(paquetesPorLote)) {
+//                 for (let i = 0; i < datosLote.paquetes.length; i++) {
+//                     const paquete = datosLote.paquetes[i];
+//                     await transaction.raw(
+//                         `EXEC SP_InsertarAtadosPlancha 
+//                          @Operacion_ID=?, @NumeroItem=?, @Atado=?, @Rollos=?,
+//                          @Sobrante=?, @Peso=?, @Calidad=?, @ID_LotePlancha=?, @Etiqueta=?`,
+//                         [
+//                             operacionId,
+//                             String(numeroItemInt),
+//                             parseInt(paquete.atado) || (i + 1),
+//                             parseInt(paquete.rollos) || 0,
+//                             sobrante || 0,
+//                             paquete.peso,
+//                             paquete.esCalidad ? 1 : 0,
+//                             idLotePlancha,
+//                             parseInt(paquete.nroEtiqueta) || 0
+//                         ]);
+//                 }
+
+//                 await transaction.raw(
+//                     `EXEC SP_InsertarRegistracionPlancha 
+//                      @Operacion_ID=?, @Tarea=?, @Maquina=?, @NroBatch=?, @Cuchillas=?,
+//                      @CodProducto=?, @CodProductoS=?, @Lote_ID=?, @KilosProgramados=?,
+//                      @KilosSobreOrden=?, @KilosCalidad=?, @Estado=?, @Sobrante=?,
+//                      @ACalidad=?, @LotePlanchaDesc=?, @Nro_Matching=?, @ItemPedido_ID=?,
+//                      @NumeroItem=?, @Kilos_Bruto=?, @ACalidadSO=?, @Atados=?, @Rollos=?,
+//                      @ID_LotePlancha=?, @CodSerie=?, @CodLote=?, @Usuario=?, @FechaReg=?,
+//                      @RetornaStock=?`,
+//                     [
+//                         operacionId,
+//                         opInfo.Tarea || 'Embalaje',
+//                         opInfo.Maquina || '',
+//                         opInfo.NroBatch || '',
+//                         opInfo.Operacion_Cuchillas || '',
+//                         opInfo.Codigo_Producto || '',
+//                         '',
+//                         opInfo.Origen_Lote_ID || '',
+//                         parseFloat(opInfo.KilosProgramadosEntrantes) || 0,
+//                         datosLote.totalSobreOrden,
+//                         0,
+//                         '1',
+//                         sobrante || 0,
+//                         datosLote.hayCalidadPendiente ? '1' : '0',
+//                         datosLote.serieLote,
+//                         opInfo.Nro_Matching || '',
+//                         itemPedidoFinal,
+//                         numeroItemInt,
+//                         datosLote.totalBruto,
+//                         '0',
+//                         datosLote.totalAtados,
+//                         datosLote.totalRollos,
+//                         idLotePlancha,
+//                         '',
+//                         '',
+//                         usuario || 'sistema',
+//                         new Date(),
+//                         'N'
+//                     ]);
+
+//                 // ✅✅ AUTO-REPARACIÓN (paridad VB): alinea CalidadFinal con el registro.
+//                 //    Los defectos grabados antes del fix tienen Lote_ID = lote del paquete;
+//                 //    el listado joinea por Lote_ID = entrante. Este UPDATE los corrige
+//                 //    en el mismo momento del registro (sanea tu operación 75101-025 sola).
+//                 await transaction.raw(
+//                     `UPDATE dbo.CalidadFinal SET Lote_ID = ?
+//                      WHERE Operacion_ID = ? AND ItemPedido_ID = ? AND NumeroItem = ? AND Sobrante = ?
+//                        AND ID_LotePlancha = ? AND (Dictamen IS NULL OR Dictamen = 0)`,
+//                     [opInfo.Origen_Lote_ID || '', operacionId, itemPedidoFinal || '',
+//                      numeroItemInt, sobrante || 0, idLotePlancha]);
+
+//                 // ✅ VB frmCalidad: marca los atados del paquete "en calidad" (ahora que existen)
+//                 if (datosLote.hayCalidadPendiente) {
+//                     await transaction.raw(
+//                         `EXEC SP_EditarAtadosRegistradosPlanchaCalidad @Operacion_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?, @Calidad=?`,
+//                         [operacionId, numeroItemInt, sobrante || 0, idLotePlancha, 1]);
+//                 }
+//             }
+
+//             await transaction.commit();
+//             console.log('✅ registrarPaquetesEmbalaje COMMIT OK (CalidadFinal.Lote_ID alineado al entrante)');
+//             res.status(200).json({ message: 'Paquetes registrados correctamente' });
+//         } catch (error) {
+//             await transaction.rollback();
+//             throw error;
+//         }
+//     } catch (error) {
+//         console.error('❌ Error registrarPaquetesEmbalaje:', error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
+
+
+
+
 const registrarPaquetesEmbalaje = async (req, res) => {
     const { operacionId, itemPedidoId, loteIds, sobrante, atados, lineaData, usuario } = req.body;
-    console.log('🟢 registrarPaquetesEmbalaje');
-    console.log('   operacionId:', operacionId, '| itemPedidoId(línea):', itemPedidoId);
+    console.log('\n' + '='.repeat(80));
+    console.log('🟢 INICIO registrarPaquetesEmbalaje');
+    console.log('='.repeat(80));
+    console.log('📥 DATOS RECIBIDOS:');
+    console.log('   operacionId:', operacionId);
+    console.log('   itemPedidoId (del front):', itemPedidoId);
+    console.log('   loteIds (del front):', loteIds);
+    console.log('   sobrante:', sobrante);
+    console.log('   atados.length:', atados?.length || 0);
+    console.log('   usuario:', usuario);
+    console.log('   lineaData?.ItemPedido_ID:', lineaData?.ItemPedido_ID);
+    console.log('   lineaData?.PedidoID:', lineaData?.PedidoID);
+    console.log('   lineaData?.NumeroItem:', lineaData?.NumeroItem);
+    console.log('   lineaData?.Origen_Lote_ID:', lineaData?.Origen_Lote_ID);
+    console.log('   lineaData?.Lote_IDS:', lineaData?.Lote_IDS);
+
     try {
         const transaction = await dbRegistracionNET.transaction();
         try {
+            // ============ PASO 1: Datos de OperacionesCalipso ============
             const [opInfo] = await transaction.raw(
-                `SELECT Maquina, NroBatch, Codigo_Producto, Origen_Lote, Origen_Lote_ID, 
-                        Operacion_Cuchillas, Nro_Matching, Tarea, KilosProgramadosEntrantes,
-                        ItemPedido_ID
-                 FROM OperacionesCalipso 
-                 WHERE Operacion_ID = ?`,
+                `SELECT Maquina, NroBatch, Codigo_Producto, Origen_Lote, Origen_Lote_ID, Operacion_Cuchillas, Nro_Matching, Tarea, KilosProgramadosEntrantes, ItemPedido_ID, NumeroPedido FROM OperacionesCalipso WHERE Operacion_ID = ?`,
                 [operacionId]
             );
             if (!opInfo) throw new Error("No se encontró información de la operación en OperacionesCalipso");
 
-            // ✅✅ FIX 1: el ItemPedido_ID que se guarda es el de la LÍNEA (como el VB: Inicial.sPedidoID),
-            //    no el de la operación. Así Registracion y CalidadPlancha comparten la clave
-            //    y SP_TraerCalidadPlanchaT (listado de Calidad) los encuentra.
-            const itemPedidoFinal = lineaData?.ItemPedido_ID || itemPedidoId || lineaData?.PedidoID || opInfo.ItemPedido_ID;
+            console.log('\n📋 opInfo (de OperacionesCalipso):');
+            console.log('   Maquina:', opInfo.Maquina);
+            console.log('   Tarea:', opInfo.Tarea);
+            console.log('   Codigo_Producto:', opInfo.Codigo_Producto);
+            console.log('   Origen_Lote:', opInfo.Origen_Lote);
+            console.log('   Origen_Lote_ID (🔑 entrante = VB sLoteID):', opInfo.Origen_Lote_ID);
+            console.log('   ItemPedido_ID (opInfo):', opInfo.ItemPedido_ID);
+            console.log('   NumeroPedido:', opInfo.NumeroPedido);
 
+            // ============ RESOLUCIÓN DE CLAVES (como VB Inicial) ============
+            const itemPedidoFinal = lineaData?.ItemPedido_ID || itemPedidoId || lineaData?.PedidoID || opInfo.ItemPedido_ID;
+            const numeroItemInt = parseInt(lineaData?.NumeroItem) || 1;
+            const loteEntrante = opInfo.Origen_Lote_ID || '';   // ✅ VB: Inicial.sLoteID
+            const familia = String(opInfo.Codigo_Producto || '').substring(8, 10) || 'HO';
+            const numeroPedidoFinal = opInfo.NumeroPedido || lineaData?.NumeroPedido || '';
+
+            console.log('\n🔑 CLAVES RESUELTAS (paridad VB):');
+            console.log('   itemPedidoFinal (VB sPedidoID):', itemPedidoFinal);
+            console.log('   numeroItemInt:', numeroItemInt);
+            console.log('   loteEntrante (VB sLoteID = Origen_Lote_ID):', loteEntrante);
+            console.log('   familia (substring 8,10):', familia);
+            console.log('   numeroPedidoFinal:', numeroPedidoFinal);
+
+            // ============ AGRUPAR PAQUETES ============
             const paquetesPorLote = {};
             for (const paquete of atados) {
                 const idLotePlancha = paquete.idLotePlancha || opInfo.Origen_Lote_ID || loteIds;
-                const serieLote = paquete.serieLote || opInfo.Origen_Lote || lineaData?.SerieLote || '';
+                // const serieLote = paquete.serieLote || opInfo.Origen_Lote || lineaData?.SerieLote || '';
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                const serieLoteBase = paquete.serieLote || opInfo.Origen_Lote || lineaData?.SerieLote || '';
+                const serieLote = serieLoteBase ? `${serieLoteBase} - Embalaje` : '';
+
+
+
+
+
+
+                
                 if (!paquetesPorLote[idLotePlancha]) {
                     paquetesPorLote[idLotePlancha] = {
                         idLotePlancha, serieLote, paquetes: [],
@@ -5608,19 +6320,24 @@ const registrarPaquetesEmbalaje = async (req, res) => {
                 const peso = parseFloat(paquete.peso) || 0;
                 const kilosBruto = parseFloat(paquete.kilosBruto) || peso;
                 paquetesPorLote[idLotePlancha].paquetes.push(paquete);
-
-                // ✅✅ FIX 2 (convención VB): los kilos de un paquete EN CALIDAD PENDIENTE
-                //    viven en Kilos_Sobreorden; ACalidad='1' + la fila de CalidadPlancha
-                //    (Dictamen=0) son los que marcan "en calidad". El dictamen después
-                //    los deja en SO (aprobado) o los pasa a Kilos_Calidad (rechazado).
                 paquetesPorLote[idLotePlancha].totalSobreOrden += peso;
                 if (paquete.esCalidad) paquetesPorLote[idLotePlancha].hayCalidadPendiente = true;
-
                 paquetesPorLote[idLotePlancha].totalBruto += kilosBruto;
                 paquetesPorLote[idLotePlancha].totalAtados += 1;
                 paquetesPorLote[idLotePlancha].totalRollos += parseInt(paquete.rollos) || 0;
             }
 
+            console.log('\n📦 PAQUETES POR LOTE:');
+            Object.entries(paquetesPorLote).forEach(([idLote, datos]) => {
+                console.log(`   🏷️  ID_LotePlancha: ${idLote}`);
+                console.log(`      Serie/Lote: ${datos.serieLote}`);
+                console.log(`      Paquetes: ${datos.paquetes.length}`);
+                console.log(`      Total SO: ${datos.totalSobreOrden} kg`);
+                console.log(`      Hay calidad pendiente: ${datos.hayCalidadPendiente}`);
+            });
+
+            // ============ LIMPIEZA ============
+            console.log('\n🗑️  LIMPIEZA DE REGISTROS:');
             for (const idLotePlancha of Object.keys(paquetesPorLote)) {
                 await transaction.raw(
                     `DELETE FROM AtadosPlancha WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
@@ -5628,9 +6345,14 @@ const registrarPaquetesEmbalaje = async (req, res) => {
                 await transaction.raw(
                     `DELETE FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
                     [operacionId, sobrante || 0, idLotePlancha]);
+                console.log(`   ✅ Limpiado lote ${idLotePlancha}`);
             }
 
+            // ============ INSERT POR LOTE ============
             for (const [idLotePlancha, datosLote] of Object.entries(paquetesPorLote)) {
+                console.log('\n➕ PROCESANDO LOTE:', idLotePlancha);
+
+                // --- Insertar atados ---
                 for (let i = 0; i < datosLote.paquetes.length; i++) {
                     const paquete = datosLote.paquetes[i];
                     await transaction.raw(
@@ -5639,7 +6361,7 @@ const registrarPaquetesEmbalaje = async (req, res) => {
                          @Sobrante=?, @Peso=?, @Calidad=?, @ID_LotePlancha=?, @Etiqueta=?`,
                         [
                             operacionId,
-                            String(parseInt(lineaData?.NumeroItem) || 1),
+                            String(numeroItemInt),
                             parseInt(paquete.atado) || (i + 1),
                             parseInt(paquete.rollos) || 0,
                             sobrante || 0,
@@ -5649,7 +6371,9 @@ const registrarPaquetesEmbalaje = async (req, res) => {
                             parseInt(paquete.nroEtiqueta) || 0
                         ]);
                 }
+                console.log(`   ✅ ${datosLote.paquetes.length} atados insertados`);
 
+                // --- Insertar registro ---
                 await transaction.raw(
                     `EXEC SP_InsertarRegistracionPlancha 
                      @Operacion_ID=?, @Tarea=?, @Maquina=?, @NroBatch=?, @Cuchillas=?,
@@ -5662,22 +6386,22 @@ const registrarPaquetesEmbalaje = async (req, res) => {
                     [
                         operacionId,
                         opInfo.Tarea || 'Embalaje',
-                        opInfo.Maquina || '',
+                        'EMB',  // ✅ FORZAR EMB en vez de opInfo.Maquina,
                         opInfo.NroBatch || '',
                         opInfo.Operacion_Cuchillas || '',
                         opInfo.Codigo_Producto || '',
                         '',
-                        opInfo.Origen_Lote_ID || '',
+                        loteEntrante,              // ✅ @Lote_ID del registro = entrante (VB sLoteID)
                         parseFloat(opInfo.KilosProgramadosEntrantes) || 0,
-                        datosLote.totalSobreOrden,                 // ✅ incluye kilos de calidad pendiente (VB)
-                        0,                                         // ✅ KilosCalidad=0 hasta el dictamen (VB)
+                        datosLote.totalSobreOrden,
+                        0,
                         '1',
                         sobrante || 0,
-                        datosLote.hayCalidadPendiente ? '1' : '0', // ✅ ACalidad marca "en calidad"
+                        datosLote.hayCalidadPendiente ? '1' : '0',
                         datosLote.serieLote,
                         opInfo.Nro_Matching || '',
-                        itemPedidoFinal,                           // ✅ FIX 1: item de la línea
-                        parseInt(lineaData?.NumeroItem) || 1,
+                        itemPedidoFinal,
+                        numeroItemInt,
                         datosLote.totalBruto,
                         '0',
                         datosLote.totalAtados,
@@ -5689,27 +6413,81 @@ const registrarPaquetesEmbalaje = async (req, res) => {
                         new Date(),
                         'N'
                     ]);
+                console.log(`   ✅ Registro insertado (Lote_ID=${loteEntrante}, ACalidad=${datosLote.hayCalidadPendiente ? '1' : '0'})`);
+
+                // ============ 🕵️  ANTES del UPDATE: qué hay en CalidadFinal ============
+                const antes = await transaction.raw(
+                    `SELECT ID, Lote_ID, ItemPedido_ID, NumeroItem, Sobrante, ID_LotePlancha, Dictamen, Codigo
+                     FROM dbo.CalidadFinal
+                     WHERE Operacion_ID = ? AND ID_LotePlancha = ?`,
+                    [operacionId, idLotePlancha]);
+                const filasAntes = Array.isArray(antes) ? antes : (antes?.[0] || []);
+                console.log(`\n   🔍 ANTES del UPDATE: ${filasAntes.length} filas en CalidadFinal para este lote:`);
+                filasAntes.forEach((f, idx) => {
+                    console.log(`      [${idx}] ID=${f.ID} | Lote_ID=${f.Lote_ID} | ItemPedido=${f.ItemPedido_ID} | NumeroItem=${f.NumeroItem} | Dictamen=${f.Dictamen} | Codigo=${f.Codigo}`);
+                    console.log(`           coincide Lote_ID con entrante? ${f.Lote_ID === loteEntrante ? '✅ SI' : '❌ NO'}`);
+                    console.log(`           coincide ItemPedido_ID? ${String(f.ItemPedido_ID) === String(itemPedidoFinal) ? '✅ SI' : '❌ NO'}`);
+                });
+
+                // ============ AUTO-REPARACIÓN ============
+                const updateResult = await transaction.raw(
+                    `UPDATE dbo.CalidadFinal SET Lote_ID = ?
+                     WHERE Operacion_ID = ? AND ItemPedido_ID = ? AND NumeroItem = ? AND Sobrante = ?
+                       AND ID_LotePlancha = ? AND (Dictamen IS NULL OR Dictamen = 0)`,
+                    [loteEntrante, operacionId, itemPedidoFinal || '',
+                     numeroItemInt, sobrante || 0, idLotePlancha]);
+                console.log(`   🔄 UPDATE ejecutado (rows affected): ${updateResult?.[0] || updateResult}`);
+
+                // ============ 🕵️  DESPUÉS del UPDATE ============
+                const despues = await transaction.raw(
+                    `SELECT ID, Lote_ID, ItemPedido_ID, NumeroItem, Sobrante, ID_LotePlancha, Dictamen, Codigo
+                     FROM dbo.CalidadFinal
+                     WHERE Operacion_ID = ? AND ID_LotePlancha = ?`,
+                    [operacionId, idLotePlancha]);
+                const filasDespues = Array.isArray(despues) ? despues : (despues?.[0] || []);
+                console.log(`   🔍 DESPUÉS del UPDATE: ${filasDespues.length} filas:`);
+                filasDespues.forEach((f, idx) => {
+                    console.log(`      [${idx}] ID=${f.ID} | Lote_ID=${f.Lote_ID} | ItemPedido=${f.ItemPedido_ID} | NumeroItem=${f.NumeroItem} | Dictamen=${f.Dictamen}`);
+                });
+
+                // --- Marcar atados en calidad ---
+                if (datosLote.hayCalidadPendiente) {
+                    await transaction.raw(
+                        `EXEC SP_EditarAtadosRegistradosPlanchaCalidad @Operacion_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?, @Calidad=?`,
+                        [operacionId, numeroItemInt, sobrante || 0, idLotePlancha, 1]);
+                    console.log(`   ✅ Atados marcados "en calidad"`);
+                }
+
+                // ============ 🎯 VERIFICACIÓN FINAL: ¿el SP del listado la ve? ============
+                try {
+                    const checkListado = await transaction.raw(
+                        `EXEC dbo.SP_TraerCalidadPlanchaT ?,?,?,?,?`,
+                        [operacionId, String(itemPedidoFinal || ''), sobrante || 0, 0, idLotePlancha]);
+                    const filasListado = Array.isArray(checkListado) ? checkListado : (checkListado?.[0] || []);
+                    console.log(`\n   🎯 VERIFICACIÓN SP_TraerCalidadPlanchaT: ${filasListado.length} filas`);
+                    if (filasListado.length > 0) {
+                        console.log(`      ✅ APARECE EN EL LISTADO con Dictamen=${filasListado[0].Dictamen}, Codigo=${filasListado[0].Codigo}`);
+                    } else {
+                        console.log(`      ❌ NO APARECE - las claves no matchean con el join del SP`);
+                    }
+                } catch (eChk) {
+                    console.log(`      ⚠️ Error al ejecutar SP de verificación: ${eChk.message}`);
+                }
             }
 
             await transaction.commit();
+            console.log('\n✅ COMMIT OK');
+            console.log('='.repeat(80) + '\n');
             res.status(200).json({ message: 'Paquetes registrados correctamente' });
         } catch (error) {
             await transaction.rollback();
             throw error;
         }
     } catch (error) {
-        console.error('❌ Error registrarPaquetesEmbalaje:', error);
+        console.error('❌ Error registrarPaquetesEmbalaje:', error.message);
         res.status(500).json({ error: error.message });
     }
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -5974,25 +6752,270 @@ const getCalidadRegistrada = async (req, res) => {
 };
 
 // Guardar defectos de calidad
+// const guardarCalidad = async (req, res) => {
+//     const { operacionId, itemPedidoId, numeroItem, sobrante, lineaData, defectos } = req.body;
+//     const transaction = await dbRegistracionNET.transaction();
+
+//     try {
+//         // 1. Eliminar defectos existentes
+//         await transaction.raw(
+//             "EXEC SP_EliminarCalidadPlancha @Operacion_ID=?, @ItemPedido_ID=?, @NumeroItem=?, @Sobrante=?",
+//             [operacionId, itemPedidoId, numeroItem, sobrante || 0]
+//         );
+
+//         // 2. Marcar la línea como "en calidad"
+//         await transaction.raw(
+//             "EXEC SP_EditarAtadosRegistradosPlanchaCalidad @Operacion_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?, @Calidad=?",
+//             [operacionId, numeroItem, sobrante || 0, lineaData?.Lote_IDS || '', 1]
+//         );
+
+//         // 3. Insertar cada defecto
+//         for (const d of defectos) {
+//             await transaction.raw(
+//                 `EXEC SP_InsertarCalidadPlancha 
+//                  @Operacion_ID=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?, 
+//                  @Nota=?, @Lote_ID=?, @Sobrante=?, @ItemPedido_ID=?, @NumeroItem=?, 
+//                  @NumeroPedido=?, @Sobreorden=?, @ID_LotePlancha=?, @Usuario=?, @FechaReg=?`,
+//                 [
+//                     operacionId,
+//                     lineaData?.CodigoProducto?.substring(8, 10) || 'HO',
+//                     d.codDefecto,
+//                     d.codGravedad,
+//                     d.codUbicacion,
+//                     d.nota || '',
+//                     lineaData?.Lote_IDS || '',
+//                     sobrante || 0,
+//                     itemPedidoId,
+//                     numeroItem,
+//                     lineaData?.NumeroPedido || '',
+//                     0, // Sobreorden (0 para calidad normal)
+//                     lineaData?.Lote_IDS || '',
+//                     'pmorrone', // usuario
+//                     new Date()
+//                 ]
+//             );
+//         }
+
+//         await transaction.commit();
+//         res.json({ success: true, message: 'Defectos guardados correctamente' });
+//     } catch (error) {
+//         await transaction.rollback();
+//         console.error('Error al guardar calidad:', error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// const guardarCalidad = async (req, res) => {
+//     const { operacionId, itemPedidoId, numeroItem, sobrante, lineaData, defectos, usuario } = req.body;
+//     const transaction = await dbRegistracionNET.transaction();
+//     try {
+//         const idLotePlancha = lineaData?.Lote_IDS || lineaData?.ID_LotePlancha || '';
+//         const numeroItemInt = parseInt(numeroItem) || 0;
+
+//         // ✅✅ Lote_ID = lote ENTRANTE (VB: Inicial.sLoteID), NUNCA el lote del paquete
+//         let loteIDEntrante = lineaData?.Origen_Lote_ID || lineaData?.LoteID || '';
+//         if (!loteIDEntrante) {
+//             const [opInfo] = await transaction.raw(
+//                 `SELECT Origen_Lote_ID FROM OperacionesCalipso WHERE Operacion_ID = ?`, [operacionId]);
+//             loteIDEntrante = opInfo?.Origen_Lote_ID || '';
+//         }
+
+//         // 1) Borro solo los pendientes DE ESTE LOTE (VB: SP_EliminarCalidadPlancha con 5 params)
+//         await transaction.raw(
+//             "EXEC SP_EliminarCalidadPlancha @Operacion_ID=?, @ItemPedido_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?",
+//             [operacionId, itemPedidoId || '', numeroItemInt, sobrante || 0, idLotePlancha]);
+
+//         // 2) Marco atados "en calidad" (si aún no existen no pasa nada: el registro lo repite)
+//         await transaction.raw(
+//             "EXEC SP_EditarAtadosRegistradosPlanchaCalidad @Operacion_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?, @Calidad=?",
+//             [operacionId, numeroItemInt, sobrante || 0, idLotePlancha, 1]);
+
+//         // 3) Inserto cada defecto con el Lote_ID entrante (clave del join del listado)
+//         for (const d of (defectos || [])) {
+//             await transaction.raw(
+//                 `EXEC SP_InsertarCalidadPlancha
+//                  @Operacion_ID=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?,
+//                  @Nota=?, @Lote_ID=?, @Sobrante=?, @ItemPedido_ID=?, @NumeroItem=?,
+//                  @NumeroPedido=?, @Sobreorden=?, @ID_LotePlancha=?, @Usuario=?, @FechaReg=?`,
+//                 [
+//                     operacionId,
+//                     String(lineaData?.CodigoProducto || '').substring(8, 10) || 'HO',
+//                     d.codDefecto,
+//                     String(d.codGravedad),
+//                     String(d.codUbicacion),
+//                     d.nota || '',
+//                     loteIDEntrante,          // ✅✅ ACÁ estaba el bug de fondo
+//                     sobrante || 0,
+//                     itemPedidoId || '',
+//                     numeroItemInt,
+//                     lineaData?.NumeroPedido || '',
+//                     0,
+//                     idLotePlancha,
+//                     usuario || 'pmorrone',
+//                     new Date()
+//                 ]);
+//         }
+
+//         await transaction.commit();
+//         res.json({ success: true, message: 'Defectos guardados correctamente' });
+//     } catch (error) {
+//         await transaction.rollback();
+//         console.error('Error al guardar calidad:', error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
+
+
+
+
+
+
+
+// Guardar defectos de calidad (PLANCHAS / EMBALAJE)
+// ✅✅ FIX DEFINITIVO (paridad VB frmCalidad.btnConfirma):
+//    @Lote_ID = lote ENTRANTE (Inicial.sLoteID = Origen_Lote_ID), NO el lote del paquete.
+//    El SP_TraerOperacionesCalidad joinea re.Lote_ID = CalidadFinal.Lote_ID;
+//    con el lote del paquete el join no matchea y la op NUNCA aparece en el listado.
+// const guardarCalidad = async (req, res) => {
+//     const { operacionId, itemPedidoId, numeroItem, sobrante, lineaData, defectos, usuario } = req.body;
+//     const transaction = await dbRegistracionNET.transaction();
+//     try {
+//         const idLotePlancha = lineaData?.Lote_IDS || lineaData?.ID_LotePlancha || '';
+//         const numeroItemInt = parseInt(numeroItem) || 0;
+
+//         // ✅ Lote entrante resuelto en el SERVIDOR (VB: Inicial.sLoteID)
+//         let loteIDEntrante = lineaData?.Origen_Lote_ID || lineaData?.LoteID || '';
+//         if (!loteIDEntrante) {
+//             const [opInfo] = await transaction.raw(
+//                 `SELECT Origen_Lote_ID FROM OperacionesCalipso WHERE Operacion_ID = ?`, [operacionId]);
+//             loteIDEntrante = opInfo?.Origen_Lote_ID || '';
+//         }
+//         let numeroPedido = lineaData?.NumeroPedido || '';
+//         if (!numeroPedido) {
+//             const [opInfo2] = await transaction.raw(
+//                 `SELECT NumeroPedido FROM OperacionesCalipso WHERE Operacion_ID = ?`, [operacionId]);
+//             numeroPedido = opInfo2?.NumeroPedido || '';
+//         }
+
+//         // 1) VB: SP_EliminarCalidadPlancha con 5 params (acotado al lote, no a todo el ítem)
+//         await transaction.raw(
+//             "EXEC SP_EliminarCalidadPlancha @Operacion_ID=?, @ItemPedido_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?",
+//             [operacionId, itemPedidoId || '', numeroItemInt, sobrante || 0, idLotePlancha]);
+
+//         // 2) VB: SP_EditarAtadosRegistradosPlanchaCalidad @Calidad=1
+//         await transaction.raw(
+//             "EXEC SP_EditarAtadosRegistradosPlanchaCalidad @Operacion_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?, @Calidad=?",
+//             [operacionId, numeroItemInt, sobrante || 0, idLotePlancha, 1]);
+
+//         // 3) VB: SP_InsertarCalidadPlancha (15 params) con @Lote_ID = ENTRANTE
+//         for (const d of (defectos || [])) {
+//             await transaction.raw(
+//                 `EXEC SP_InsertarCalidadPlancha 
+//                  @Operacion_ID=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?, 
+//                  @Nota=?, @Lote_ID=?, @Sobrante=?, @ItemPedido_ID=?, @NumeroItem=?, 
+//                  @NumeroPedido=?, @Sobreorden=?, @ID_LotePlancha=?, @Usuario=?, @FechaReg=?`,
+//                 [
+//                     operacionId,
+//                     String(lineaData?.CodigoProducto || '').substring(8, 10) || 'HO',
+//                     d.codDefecto,
+//                     String(d.codGravedad),
+//                     String(d.codUbicacion),
+//                     d.nota || '',
+//                     loteIDEntrante,          // ✅✅ ACÁ ESTABA EL BUG DE FONDO
+//                     sobrante || 0,
+//                     itemPedidoId || '',
+//                     numeroItemInt,
+//                     numeroPedido,
+//                     0,
+//                     idLotePlancha,
+//                     usuario || 'pmorrone',
+//                     new Date()
+//                 ]
+//             );
+//         }
+
+//         await transaction.commit();
+//         console.log(`✅ [Calidad EMB] op=${operacionId} | lote=${idLotePlancha} | Lote_ID=${loteIDEntrante} | defectos=${(defectos || []).length}`);
+//         res.json({ success: true, message: 'Defectos guardados correctamente' });
+//     } catch (error) {
+//         await transaction.rollback();
+//         console.error('Error al guardar calidad:', error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// Guardar defectos de calidad (PLANCHAS / EMBALAJE)
+// ✅✅ FIX DEFINITIVO: @Lote_ID = lote ENTRANTE (VB: Inicial.sLoteID = Origen_Lote_ID),
+//    NO el lote del paquete. El SP_TraerOperacionesCalidad joinea re.Lote_ID = CalidadFinal.Lote_ID
+//    (igual que slitter); con el lote del paquete el join no matchea y la op NUNCA aparece.
 const guardarCalidad = async (req, res) => {
-    const { operacionId, itemPedidoId, numeroItem, sobrante, lineaData, defectos } = req.body;
+    const { operacionId, itemPedidoId, numeroItem, sobrante, lineaData, defectos, usuario } = req.body;
     const transaction = await dbRegistracionNET.transaction();
-
     try {
-        // 1. Eliminar defectos existentes
-        await transaction.raw(
-            "EXEC SP_EliminarCalidadPlancha @Operacion_ID=?, @ItemPedido_ID=?, @NumeroItem=?, @Sobrante=?",
-            [operacionId, itemPedidoId, numeroItem, sobrante || 0]
-        );
+        const idLotePlancha = lineaData?.Lote_IDS || lineaData?.ID_LotePlancha || '';
+        const numeroItemInt = parseInt(numeroItem) || 0;
 
-        // 2. Marcar la línea como "en calidad"
+        // ✅ Lote entrante resuelto en el SERVIDOR (VB: Inicial.sLoteID)
+        let loteIDEntrante = lineaData?.Origen_Lote_ID || lineaData?.LoteID || '';
+        if (!loteIDEntrante) {
+            const [opInfo] = await transaction.raw(
+                `SELECT Origen_Lote_ID FROM OperacionesCalipso WHERE Operacion_ID = ?`, [operacionId]);
+            loteIDEntrante = opInfo?.Origen_Lote_ID || '';
+        }
+
+        console.log('🔑 [guardarCalidad EMB] op=', operacionId,
+            '| item=', itemPedidoId, '| numeroItem=', numeroItemInt,
+            '| ID_LotePlancha=', idLotePlancha, '| Lote_ID(entrante)=', loteIDEntrante);
+
+        // 1) Borro defectos previos SOLO de este lote (VB: SP_EliminarCalidadPlancha, 5 params)
+        await transaction.raw(
+            "EXEC SP_EliminarCalidadPlancha @Operacion_ID=?, @ItemPedido_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?",
+            [operacionId, itemPedidoId || '', numeroItemInt, sobrante || 0, idLotePlancha]);
+
+        // 2) Marco atados "en calidad" (si aún no existen, el registro lo repite después)
         await transaction.raw(
             "EXEC SP_EditarAtadosRegistradosPlanchaCalidad @Operacion_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?, @Calidad=?",
-            [operacionId, numeroItem, sobrante || 0, lineaData?.Lote_IDS || '', 1]
-        );
+            [operacionId, numeroItemInt, sobrante || 0, idLotePlancha, 1]);
 
-        // 3. Insertar cada defecto
-        for (const d of defectos) {
+        // 3) Inserto cada defecto: @Lote_ID = ENTRANTE, @ID_LotePlancha = lote del paquete (VB)
+        for (const d of (defectos || [])) {
             await transaction.raw(
                 `EXEC SP_InsertarCalidadPlancha 
                  @Operacion_ID=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?, 
@@ -6000,25 +7023,26 @@ const guardarCalidad = async (req, res) => {
                  @NumeroPedido=?, @Sobreorden=?, @ID_LotePlancha=?, @Usuario=?, @FechaReg=?`,
                 [
                     operacionId,
-                    lineaData?.CodigoProducto?.substring(8, 10) || 'HO',
+                    String(lineaData?.CodigoProducto || '').substring(8, 10) || 'HO',
                     d.codDefecto,
-                    d.codGravedad,
-                    d.codUbicacion,
+                    String(d.codGravedad),
+                    String(d.codUbicacion),
                     d.nota || '',
-                    lineaData?.Lote_IDS || '',
+                    loteIDEntrante,          // ✅✅ ACÁ ESTABA EL BUG (antes: lineaData.Lote_IDS)
                     sobrante || 0,
-                    itemPedidoId,
-                    numeroItem,
+                    itemPedidoId || '',
+                    numeroItemInt,
                     lineaData?.NumeroPedido || '',
-                    0, // Sobreorden (0 para calidad normal)
-                    lineaData?.Lote_IDS || '',
-                    'pmorrone', // usuario
+                    0,
+                    idLotePlancha,
+                    usuario || 'pmorrone',
                     new Date()
                 ]
             );
         }
 
         await transaction.commit();
+        console.log(`✅ [guardarCalidad EMB] defectos=${(defectos || []).length} grabados con Lote_ID=${loteIDEntrante}`);
         res.json({ success: true, message: 'Defectos guardados correctamente' });
     } catch (error) {
         await transaction.rollback();
@@ -6026,10 +7050,6 @@ const guardarCalidad = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
-
-
-
-
 
 
 
@@ -6524,6 +7544,181 @@ const getFichaEmbalajePdf = async (req, res) => {
     }
 };
 
+// ============================================================================
+// ELIMINAR DEFECTOS DE CALIDAD POR LOTE (cuando se elimina un paquete)
+// ============================================================================
+const eliminarCalidadPorLote = async (req, res) => {
+    const { operacionId, itemPedidoId, numeroItem, sobrante, idLotePlancha } = req.body;
+    
+    if (!operacionId || !idLotePlancha) {
+        return res.status(400).json({ error: 'Faltan datos requeridos' });
+    }
+
+    try {
+        // Eliminar todos los defectos de calidad asociados a este lote
+        await dbRegistracionNET.raw(
+            "EXEC SP_EliminarCalidadPlancha @Operacion_ID=?, @ItemPedido_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?",
+            [operacionId, itemPedidoId || '', parseInt(numeroItem) || 0, sobrante || 0, idLotePlancha]
+        );
+        
+        console.log(`✅ Defectos de calidad eliminados para lote: ${idLotePlancha}`);
+        res.status(200).json({ success: true, message: 'Defectos eliminados correctamente' });
+    } catch (error) {
+        console.error('❌ Error al eliminar calidad por lote:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// ============================================================================
+// ✅✅ v2: GUARDAR DEFECTOS POR LOTE (EMB) POST-REGISTRO, con claves resueltas
+//    en el SERVIDOR (como el Inicial del VB) y auto-verificación.
+// ============================================================================
+let _spCalidadPlanchaConSerie = null;
+const spInsertarCalidadPlanchaConSerie = async (trx) => {
+    if (_spCalidadPlanchaConSerie !== null) return _spCalidadPlanchaConSerie;
+    try {
+        const r = await trx.raw(
+            `SELECT name FROM sys.parameters
+             WHERE object_id = OBJECT_ID('dbo.SP_InsertarCalidadPlancha')
+             ORDER BY parameter_id`);
+        const rows = Array.isArray(r) ? r : (r[0] || []);
+        _spCalidadPlanchaConSerie = rows.some(x => String(x.name).toLowerCase() === '@serie_lote');
+    } catch (e) {
+        _spCalidadPlanchaConSerie = false;
+    }
+    return _spCalidadPlanchaConSerie;
+};
+
+const guardarCalidadLoteEmbalaje = async (req, res) => {
+    const {
+        operacionId, itemPedidoId, numeroItem, sobrante = 0,
+        idLotePlancha, serieLote, codigoProducto, numeroPedido,
+        origenLoteId, defectos = [], usuario
+    } = req.body;
+
+    if (!operacionId || !idLotePlancha) {
+        return res.status(400).json({ error: 'Faltan datos (operacionId / idLotePlancha).' });
+    }
+
+    const transaction = await dbRegistracionNET.transaction();
+    try {
+        // ✅ Claves resueltas en el SERVIDOR (nunca confiar en el front)
+        const [opInfo] = await transaction.raw(
+            `SELECT Codigo_Producto, Origen_Lote_ID, Origen_Lote, NumeroPedido
+             FROM OperacionesCalipso WHERE Operacion_ID = ?`, [operacionId]);
+        const familia = String(codigoProducto || opInfo?.Codigo_Producto || '').substring(8, 10) || 'HO';
+        const loteIDEntrante = origenLoteId || opInfo?.Origen_Lote_ID || '';   // ✅ VB: Inicial.sLoteID
+        const numeroPedidoFinal = numeroPedido || opInfo?.NumeroPedido || ''; // ✅ VB: Inicial.sPedido
+        const numeroItemInt = parseInt(numeroItem) || 0;
+        const fechaReg = new Date().toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
+
+        // 1) ✅ REPARACIÓN: purga directa de pendientes DE ESTE LOTE (atrapa filas
+        //    insertadas con claves erróneas por /calidad/guardar), acotada como el VB.
+        await transaction.raw(
+            `DELETE FROM dbo.CalidadFinal
+             WHERE Operacion_ID = ? AND ItemPedido_ID = ? AND NumeroItem = ? AND Sobrante = ?
+               AND ID_LotePlancha = ? AND (Dictamen IS NULL OR Dictamen = 0)`,
+            [operacionId, itemPedidoId || '', numeroItemInt, sobrante || 0, idLotePlancha]);
+
+        // 2) VB: SP_EditarAtadosRegistradosPlanchaCalidad @Calidad=1 (atados ya existen)
+        await transaction.raw(
+            "EXEC SP_EditarAtadosRegistradosPlanchaCalidad @Operacion_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?, @Calidad=?",
+            [operacionId, numeroItemInt, sobrante || 0, idLotePlancha, 1]);
+
+        // 3) VB: SP_InsertarCalidadPlancha por defecto (15 params, @Lote_ID = entrante)
+        const sqlBase = `EXEC SP_InsertarCalidadPlancha
+             @Operacion_ID=?, @Familia=?, @Codigo=?, @Gravedad=?, @Ubicacion=?,
+             @Nota=?, @Lote_ID=?, @Sobrante=?, @ItemPedido_ID=?, @NumeroItem=?,
+             @NumeroPedido=?, @Sobreorden=?, @ID_LotePlancha=?, @Usuario=?, @FechaReg=?`;
+        const conSerie = await spInsertarCalidadPlanchaConSerie(transaction);
+
+        for (const d of defectos) {
+            const values = [
+                operacionId,
+                familia,
+                d.codDefecto,
+                String(d.codGravedad ?? '0'),
+                String(d.codUbicacion ?? '0'),
+                d.nota || '',
+                loteIDEntrante,          // ✅✅ ACÁ estaba el bug: entrante, NO el lote del paquete
+                sobrante || 0,
+                itemPedidoId || '',
+                numeroItemInt,
+                numeroPedidoFinal,
+                0,
+                idLotePlancha,
+                usuario || 'sistema',
+                fechaReg
+            ];
+            if (conSerie) {
+                await transaction.raw(`${sqlBase}, @Serie_Lote=?`, [...values, String(serieLote || '').substring(0, 11)]);
+            } else {
+                await transaction.raw(sqlBase, values);
+            }
+        }
+
+        // 4) ✅ AUTO-VERIFICACIÓN: ¿el SP del listado ya lo ve?
+        const check = await transaction.raw(
+            "EXEC SP_TraerCalidadPlanchaT ?,?,?,?,?",
+            [operacionId, String(itemPedidoId || ''), sobrante || 0, 0, idLotePlancha]);
+        const rows = Array.isArray(check) ? check : (check[0] || []);
+        console.log(`🔬 [Calidad-EMB] lote=${idLotePlancha} | insertados=${defectos.length} | SP_TraerCalidadPlanchaT rows=${rows.length}`);
+        if (rows.length === 0 && defectos.length > 0) {
+            const dump = await transaction.raw(
+                `SELECT ID, ItemPedido_ID, NumeroItem, Sobrante, Sobreorden, Lote_ID, ID_LotePlancha, Codigo, Dictamen
+                 FROM dbo.CalidadFinal WHERE Operacion_ID = ? AND ID_LotePlancha = ?`,
+                [operacionId, idLotePlancha]);
+            console.log('🔬 Filas CalidadFinal del lote:', JSON.stringify(Array.isArray(dump) ? dump : (dump[0] || [])));
+        }
+
+        await transaction.commit();
+        res.status(200).json({ success: true, message: 'Defectos guardados correctamente', visibles: rows.length });
+    } catch (error) {
+        await transaction.rollback();
+        console.error('❌ Error guardarCalidadLoteEmbalaje:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// ============================================================================
+// ✅✅ ELIMINAR PAQUETE DE EMBALAJE = réplica exacta de frmPaquetes.ResetearPaquete
+//    (registro + atados + liberar lote + defectos). Antes el 🗑️ solo tocaba React.
+// ============================================================================
+const eliminarPaqueteEmbalaje = async (req, res) => {
+    const { operacionId, itemPedidoId, numeroItem, sobrante = 0, idLotePlancha } = req.body;
+    if (!operacionId || !idLotePlancha) {
+        return res.status(400).json({ error: 'Faltan datos (operacionId / idLotePlancha).' });
+    }
+    const transaction = await dbRegistracionNET.transaction();
+    try {
+        const numeroItemInt = parseInt(numeroItem) || 0;
+        // 1) VB: SP_EliminarOperacionesRegistradasPlancha
+        await transaction.raw(
+            "EXEC SP_EliminarOperacionesRegistradasPlancha @Operacion_ID=?, @ItemPedido_ID=?, @ID_LotePlancha=?, @Sobrante=?",
+            [operacionId, itemPedidoId || '', idLotePlancha, sobrante || 0]);
+        // 2) VB: SP_EliminarAtadosRegistradosPlancha
+        await transaction.raw(
+            "EXEC SP_EliminarAtadosRegistradosPlancha @Operacion_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?",
+            [operacionId, numeroItemInt, sobrante || 0, idLotePlancha]);
+        // 3) VB: SP_EditarLotesDisponibles @Usado=0 (libera la serie/lote)
+        await transaction.raw(
+            "EXEC SP_EditarLotesDisponibles @ItemPedido_ID=?, @ID_LotePlancha=?, @Usado=?",
+            [itemPedidoId || '', idLotePlancha, 0]);
+        // 4) VB: SP_EliminarCalidadPlancha (borra los defectos del lote)
+        await transaction.raw(
+            "EXEC SP_EliminarCalidadPlancha @Operacion_ID=?, @ItemPedido_ID=?, @NumeroItem=?, @Sobrante=?, @ID_LotePlancha=?",
+            [operacionId, itemPedidoId || '', numeroItemInt, sobrante || 0, idLotePlancha]);
+
+        await transaction.commit();
+        console.log(`🗑️ [EMB] Paquete eliminado de la BD: lote=${idLotePlancha}`);
+        res.status(200).json({ success: true, message: 'Paquete eliminado correctamente' });
+    } catch (error) {
+        await transaction.rollback();
+        console.error('❌ Error eliminarPaqueteEmbalaje:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
 module.exports = {
     getMaquinas,
     getOperaciones,
@@ -6577,4 +7772,7 @@ module.exports = {
     getInfoOperacionCalidad,
 
     getFichaEmbalajePdf,
+    eliminarCalidadPorLote,
+    guardarCalidadLoteEmbalaje,
+    eliminarPaqueteEmbalaje,
 };

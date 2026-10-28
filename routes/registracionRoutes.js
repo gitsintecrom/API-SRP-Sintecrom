@@ -37,6 +37,7 @@ const {
     getLabelData,
     getCodigoProductoMerma,
     obtenerAtadosSobrante,
+    eliminarPaqueteEmbalaje,
     cerrarOperacion,
     getOperacionesSlitter,
     getOperacionesEmbalaje,
@@ -48,9 +49,11 @@ const {
     getDefectosByFamilia,
     getCalidadRegistrada,
     guardarCalidad,
+    guardarCalidadLoteEmbalaje,
 
     getCalidadRegistradaSlitter,
     guardarCalidadSlitter,
+    eliminarCalidadPorLote,
     getInfoOperacionCalidad,
 } = require("../controllers/registracionController");
 
@@ -91,14 +94,17 @@ router.get("/pesaje/obtener-ultima-etiqueta", obtenerUltimaEtiqueta);
 router.post("/pesaje/registrar", registrarPesaje);
 router.post("/pesaje/reset", resetPesaje);
 router.post("/pesaje/obtenerAtadosSobrantes", obtenerAtadosSobrante);
+router.post('/pesaje/eliminar-paquete-embalaje', eliminarPaqueteEmbalaje);
 
 router.get('/calidad/defectos/:familia', getDefectosByFamilia);
 router.post('/calidad/obtener', getCalidadRegistrada);
 router.post('/calidad/guardar', guardarCalidad);
+router.post('/calidad/guardar-lote', guardarCalidadLoteEmbalaje);
 
 router.get('/calidad/info-operacion/:operacionId', getInfoOperacionCalidad);
 router.post('/calidad/obtener-slitter', getCalidadRegistradaSlitter);
 router.post('/calidad/guardar-slitter', guardarCalidadSlitter);
+router.post('/calidad/eliminar-por-lote', eliminarCalidadPorLote);
 
 // ✅ NUEVA RUTA para obtener lote disponible
 router.post("/pesaje/obtener-lote-disponible", obtenerLoteDisponible);
