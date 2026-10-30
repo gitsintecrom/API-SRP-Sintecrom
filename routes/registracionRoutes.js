@@ -23,6 +23,9 @@ const {
     obtenerPaquetesEmbalaje,
     resetearPaquetesEmbalaje,
     registrarPaquetesEmbalaje,  // ✅ AGREGAR
+    registrarScrapSeriado,
+    registrarScrapNoSeriado,
+    obtenerScrapEmbalaje,
     obtenerUltimaEtiqueta,
     obtenerLoteDisponible,
     marcarLoteUsado,  
@@ -94,6 +97,9 @@ router.post("/pesaje/obtener-y-actualizar-etiqueta", obtenerYActualizarEtiqueta)
 router.post("/pesaje/obtener-paquetes-emabalaje", obtenerPaquetesEmbalaje);
 router.post("/pesaje/resetear-paquetes-emabalaje", resetearPaquetesEmbalaje);
 router.post("/pesaje/registrar-paquetes-emabalaje", registrarPaquetesEmbalaje);
+router.post('/pesaje/registrar-scrap-seriado', registrarScrapSeriado);
+router.post('/pesaje/registrar-scrap-no-seriado', registrarScrapNoSeriado);
+router.post('/pesaje/obtener-scrap-embalaje', obtenerScrapEmbalaje);
 router.get("/pesaje/obtener-ultima-etiqueta", obtenerUltimaEtiqueta);
 router.post("/pesaje/registrar", registrarPesaje);
 router.post("/pesaje/reset", resetPesaje);

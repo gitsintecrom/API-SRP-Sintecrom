@@ -2684,13 +2684,426 @@ const descubrirEsquema = async () => {
 
 
 
+// // ============================================================================
+// // getDetalleOperacionEmbalaje - FINAL v2 (paridad VB frmDetalleEmbalaje)
+// //   ✅ Header Cant.Atados/Cant.Rollos = TEÓRICOS de Stock del lote entrante
+// //      (VB: Inicial.iCantidadPaquetes/iCantidadRollos, celdas CantidadPaquetes/
+// //      CantidadRollos de la grilla de operaciones, con fallback 0→1).
+// //   ✅ Tot.Atados/Tot.Rollos por línea = SP_TotalizarAtadosRegistradosPlancha
+// //      (@Operacion_ID, @ItemPedido_ID, @Sobrante), igual que Genero_Linea del VB.
+// //   ✅ Tarjeta de línea = teóricos CRUDOS (sin || 1), como el VB (muestra 0/0).
+// // ============================================================================
+// const getDetalleOperacionEmbalaje = async (req, res) => {
+//     const { operacionId } = req.params;
+//     try {
+//         console.log('🔍 getDetalleOperacionEmbalaje - operacionId:', operacionId);
+
+//         // ---------- PASO 1: multi-operación ----------
+//         const multiOpResult = await dbRegistracionNET.raw(
+//             "EXEC SP_TraerOperacionesMultiOperacion @Operacion_ID=?", [operacionId]);
+//         let operacionesAProcesar = [];
+//         if (multiOpResult?.length && getCol(multiOpResult[0], 'NumeroMultiOperacion')) {
+//             const multiOpLines = await dbRegistracionNET.raw(
+//                 "EXEC SP_TraerOperacionesMultiOperacionporNumero @NumeroMultiOperacion=?",
+//                 [getCol(multiOpResult[0], 'NumeroMultiOperacion')]);
+//             operacionesAProcesar = multiOpLines.map(op => getCol(op, 'Operacion_ID'));
+//         }
+//         if (!operacionesAProcesar.includes(operacionId)) operacionesAProcesar.push(operacionId);
+
+//         let lineasFinales = [];
+//         let totalProgramado = 0;
+//         let serieLoteVB = "";
+//         let batchVB = "";
+//         let dPesadaTot = 0;
+//         const lotesVistos = new Set();
+//         let primerCorte = null;
+//         let corteMain = null;
+
+//         // ---------- PASO 2: loop de operaciones y líneas ----------
+//         for (const opId of operacionesAProcesar) {
+//             const cortes = await dbRegistracionNET.raw(
+//                 "EXEC SP_TraerOperacionesARegistrarEmbalaje @Operacion_ID=?", [opId]);
+//             if (!cortes?.length) continue;
+//             if (!primerCorte) primerCorte = cortes[0];
+//             if (opId === operacionId) corteMain = cortes[0];
+
+//             for (const corte of cortes) {
+//                 const origenLote = String(getCol(corte, 'Origen_lote', '') || '');
+//                 serieLoteVB += (origenLote.length > 10 ? origenLote.substring(0, 11) : origenLote) + " / ";
+//                 const nroBatch = getCol(corte, 'NroBatch');
+//                 batchVB += (nroBatch == null ? "0" : String(nroBatch).trim()) + " / ";
+//                 if (!lotesVistos.has(origenLote)) {
+//                     lotesVistos.add(origenLote);
+//                     dPesadaTot += toFloat(getCol(corte, 'Kilos_Balanza', 0));
+//                 }
+//                 totalProgramado += toFloat(getCol(corte, 'KilosEmbalaje', 0));
+
+//                 const numeroItem = getCol(corte, 'NumeroItem');
+//                 const itemPedidoLinea = String(getCol(corte, 'ItemPedido_ID', '') || '');
+//                 const regNormalArray = await dbRegistracionNET.raw(
+//                     `SELECT * FROM RegistracionUltimaOperacion
+//                      WHERE Operacion_ID = ? AND Sobrante = 0 AND NumeroItem = ? ORDER BY ID DESC`,
+//                     [opId, numeroItem]);
+
+//                 let sumSO = 0, sumCalidad = 0, sumBruto = 0;
+//                 for (const reg of regNormalArray || []) {
+//                     sumSO      += toFloat(getCol(reg, 'Kilos_Sobreorden'));
+//                     sumCalidad += toFloat(getCol(reg, 'Kilos_Calidad'));
+//                     sumBruto   += toFloat(getCol(reg, 'Kilos_Bruto'));
+//                 }
+
+//                 // ✅✅ VB Genero_Linea: Tot.Atados/Tot.Rollos = SP_TotalizarAtadosRegistradosPlancha
+//                 //    (NO contar filas de AtadosPlancha: el SP totaliza distinto, por eso el VB da 6 y nosotros 5)
+//                 let totalAtados = 0, totalRollos = 0;
+//                 try {
+//                     const tot = asArray(await dbRegistracionNET.raw(
+//                         "EXEC SP_TotalizarAtadosRegistradosPlancha @Operacion_ID=?, @ItemPedido_ID=?, @Sobrante=?",
+//                         [opId, itemPedidoLinea, 0]));
+//                     if (tot?.length) {
+//                         totalAtados = toInt(getCol(tot[0], 'TotalAtados'));
+//                         totalRollos = toInt(getCol(tot[0], 'TotalRollos'));
+//                     }
+//                 } catch (e) { /* SP inexistente → fallback abajo */ }
+//                 if (totalAtados === 0 && totalRollos === 0) {
+//                     const atadosResult = await dbRegistracionNET.raw(
+//                         `SELECT * FROM AtadosPlancha
+//                          WHERE Operacion_ID = ? AND Sobrante = 0 AND NumeroItem = ? ORDER BY Atado`,
+//                         [opId, numeroItem]);
+//                     if (atadosResult?.length) {
+//                         totalAtados = atadosResult.length;
+//                         totalRollos = atadosResult.reduce((s, a) => s + toInt(getCol(a, 'Rollos')), 0);
+//                     } else if (regNormalArray?.length) {
+//                         totalAtados = toInt(getCol(regNormalArray[0], 'Atados'));
+//                         totalRollos = toInt(getCol(regNormalArray[0], 'Rollos'));
+//                     }
+//                 }
+
+//                 lineasFinales.push({
+//                     NumeroPedido: getCol(corte, 'NumeroPedido'),
+//                     NumeroItem: numeroItem,
+//                     NoDoc: getCol(corte, 'NumeroDocumento'),
+//                     // ✅ VB: teóricos CRUDOS (la tarjeta muestra 0/0 si Calipso no generó)
+//                     AtadosTeoricos: toInt(getCol(corte, 'CantidadPaquetes')),
+//                     RollosTeoricos: toInt(getCol(corte, 'CantidadRollos')),
+//                     Programados: toFloat(getCol(corte, 'KilosEmbalaje')),
+//                     SobreOrden: sumSO, Calidad: sumCalidad, Bruto: sumBruto,
+//                     TotAtados: totalAtados, TotRollos: totalRollos,
+//                     ScrapKgs: 0, ScrapAtados: 0, ScrapRollos: 0, ScrapBruto: 0,
+//                     Operacion_ID: opId,
+//                     SerieLote: origenLote,
+//                     Origen_Lote_ID: getCol(corte, 'Origen_Lote_ID', ''),
+//                     ItemPedido_ID: itemPedidoLinea
+//                 });
+//             }
+//         }
+
+//         if (!corteMain) corteMain = primerCorte;
+//         const loteMain  = String(getCol(corteMain, 'Origen_Lote_ID', '') || '');
+//         const finalCode = String(getCol(primerCorte, 'CodProdPedido', '') || '').trim();
+
+//         // ---------- PASO 2b: HEADER Cant.Atados / Cant.Rollos ----------
+//         // ✅ VB: Inicial.iCantidadPaquetes / iCantidadRollos = celdas CantidadPaquetes /
+//         //    CantidadRollos de la grilla de operaciones (Stock del lote entrante), con 0→1.
+//         //    NO son totales registrados (por eso el VB muestra 1/1 y no 5/6).
+//         let cantAtadosHeader = 0, cantRollosHeader = 0;
+//         if (loteMain) {
+//             try {
+//                 const st = asArray(await dbRegistracionNET.raw(
+//                     `SELECT TOP 1 CantidadPaquetes, CantidadRollos FROM Stock WHERE Lote_ID = ?`, [loteMain]));
+//                 if (st?.length) {
+//                     cantAtadosHeader = toInt(getCol(st[0], 'CantidadPaquetes'));
+//                     cantRollosHeader = toInt(getCol(st[0], 'CantidadRollos'));
+//                 }
+//             } catch (e) { console.warn('⚠️ Stock teóricos header:', e.message); }
+//         }
+//         if (cantAtadosHeader === 0) cantAtadosHeader = 1;   // VB: if (CantidadPaquetes == 0) → 1
+//         if (cantRollosHeader === 0) cantRollosHeader = 1;   // VB: if (CantidadRollos == 0) → 1
+//         console.log(`📦 Header teóricos VB: Cant.Atados=${cantAtadosHeader} Cant.Rollos=${cantRollosHeader} (lote ${loteMain})`);
+
+//         // ---------- PASO 3: CodProdIntermedio (cartel azul del ENTRANTE) ----------
+//         const esCodProd = (v) => typeof v === 'string' && /^\w{4}-\w{2}-\w{2}-\w{2}-\d{4}-/.test(v.trim());
+//         const buscarCod = (row) => {
+//             if (!row) return '';
+//             const expl = String(getCol(row, 'CodProdIntermedio', '') || '').trim();
+//             if (expl) return expl;
+//             const heur = Object.values(row).find(v => esCodProd(v) && String(v).trim() !== finalCode);
+//             return heur ? String(heur).trim() : '';
+//         };
+
+//         // 1) columna directa del SP de líneas
+//         let codProdIntermedio = String(getCol(corteMain, 'CodProdIntermedio', '') || '').trim();
+
+//         // 2) registro que PRODUJO nuestro lote
+//         if (!codProdIntermedio && loteMain) {
+//             for (const q of [
+//                 `SELECT TOP 1 * FROM RegistracionUltimaOperacion WHERE ID_LotePlancha = ? ORDER BY ID DESC`,
+//                 `SELECT TOP 1 * FROM RegistracionUltimaOperacion WHERE LotePlancha_ID = ? ORDER BY ID DESC`
+//             ]) {
+//                 try {
+//                     const r = await dbRegistracionNET.raw(q, [loteMain]);
+//                     if (r?.length) { codProdIntermedio = buscarCod(r[0]); if (codProdIntermedio) break; }
+//                 } catch (e) { /* variante inexistente */ }
+//             }
+//         }
+
+//         // PPP del lote (una sola vez)
+//         let pppRow = null;
+//         if (loteMain) {
+//             try {
+//                 const p = await dbSintecromDesa.raw("EXEC SP_REG_TraerFichaTecnicaPPP @LoteID=?", [loteMain]);
+//                 if (p?.length) pppRow = p[0];
+//             } catch (e) { console.warn('⚠️ SP_REG_TraerFichaTecnicaPPP:', e.message); }
+//         }
+
+//         // 3) heurística sobre el row PPP
+//         if (!codProdIntermedio && pppRow) codProdIntermedio = buscarCod(pppRow);
+
+//         // 4) operaciones anteriores y sus registros
+//         if (!codProdIntermedio && loteMain) {
+//             try {
+//                 const ant = await dbRegistracionNET.raw(
+//                     "EXEC SP_TraerOperacionesAnteriores @Origen_Lote_ID=?", [loteMain]);
+//                 for (const a of ant || []) {
+//                     const directo = buscarCod(a);
+//                     if (directo) { codProdIntermedio = directo; break; }
+//                     const prevOp = getCol(a, 'Operacion_ID');
+//                     if (!prevOp) continue;
+//                     try {
+//                         const r = await dbRegistracionNET.raw(
+//                             "SELECT TOP 1 * FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? ORDER BY ID DESC",
+//                             [prevOp]);
+//                         if (r?.length) { codProdIntermedio = buscarCod(r[0]); if (codProdIntermedio) break; }
+//                     } catch (e) { /* sin regs */ }
+//                 }
+//             } catch (e) { console.warn('⚠️ SP_TraerOperacionesAnteriores:', e.message); }
+//         }
+
+//         // 5) 🧭 tablas REALES de Calipso con PK de lote (prioridad LOTE/STOCK/INVENT/PROCES)
+//         if (!codProdIntermedio && loteMain) {
+//             const schema = await descubrirEsquema();
+//             console.log('🧭 tablas lote (' + schema.lotTables.length + '):', schema.lotTables.join(', '));
+//             const pks = ['Lote_ID', 'LoteID', 'Id_Lote', 'ID_Lote', 'LoteId'];
+//             let intentos = 0;
+//             outerLot:
+//             for (const tabla of schema.lotTables) {
+//                 for (const pk of pks) {
+//                     if (++intentos > 60) break outerLot;
+//                     try {
+//                         const r = await dbSintecromDesa.raw(`SELECT TOP 1 * FROM [${tabla}] WHERE [${pk}] = ?`, [loteMain]);
+//                         if (r?.length) {
+//                             console.log(`   📋 fila del lote en ${tabla}:`, JSON.stringify(r[0]));
+//                             codProdIntermedio = buscarCod(r[0]);
+//                             if (codProdIntermedio) { console.log(`✅ desde ${tabla}.${pk}`); break outerLot; }
+//                         }
+//                     } catch (e) { /* esa PK no existe acá */ }
+//                 }
+//             }
+//         }
+
+//         // 6) 🧭 tablas de producto de Calipso por el Id del PPP (ahora SIEMPRE)
+//         if (!codProdIntermedio && pppRow && getCol(pppRow, 'Id')) {
+//             const schema = await descubrirEsquema();
+//             console.log('🧭 tablas producto (' + schema.prodTablesCalipso.length + '):', schema.prodTablesCalipso.join(', '));
+//             const pks = ['Id', 'ID', 'Producto_ID', 'Prod_ID', 'ID_Producto'];
+//             let intentos = 0;
+//             outerProd:
+//             for (const tabla of schema.prodTablesCalipso) {
+//                 for (const pk of pks) {
+//                     if (++intentos > 60) break outerProd;
+//                     try {
+//                         const r = await dbSintecromDesa.raw(`SELECT TOP 1 * FROM [${tabla}] WHERE [${pk}] = ?`, [getCol(pppRow, 'Id')]);
+//                         if (r?.length) {
+//                             console.log(`   📋 fila por Id en ${tabla}:`, JSON.stringify(r[0]));
+//                             codProdIntermedio = buscarCod(r[0]);
+//                             if (codProdIntermedio) { console.log(`✅ desde ${tabla}.${pk} (Id PPP)`); break outerProd; }
+//                         }
+//                     } catch (e) { /* sigue */ }
+//                 }
+//             }
+//         }
+
+//         // 7) 🧭 RegistracionNET: tablas con columna %Intermedio% / %Entrante% / CodProd%
+//         if (!codProdIntermedio) {
+//             const schema = await descubrirEsquema();
+//             console.log('🧭 RegistracionNET intermedio/entrante:', schema.intermedioTablesReg.join(', ') || '(ninguna)');
+//             for (const tabla of schema.intermedioTablesReg) {
+//                 try {
+//                     const r = await dbRegistracionNET.raw(`SELECT TOP 1 * FROM [${tabla}] WHERE Operacion_ID = ?`, [operacionId]);
+//                     if (r?.length) {
+//                         console.log(`   📋 fila en ${tabla}:`, JSON.stringify(r[0]));
+//                         codProdIntermedio = buscarCod(r[0]);
+//                         if (codProdIntermedio) { console.log(`✅ desde ${tabla} (RegistracionNET)`); break; }
+//                     }
+//                 } catch (e) { /* sin Operacion_ID */ }
+//             }
+//         }
+
+//         // 8) Transacciones
+//         if (!codProdIntermedio) {
+//             try {
+//                 const trx = await dbRegistracionNET.raw(
+//                     "SELECT TOP 1 * FROM Transacciones WHERE Operacion_ID = ?", [operacionId]);
+//                 if (trx?.length) codProdIntermedio = buscarCod(trx[0]);
+//             } catch (e) { console.warn('⚠️ Transacciones:', e.message); }
+//         }
+
+//         if (!codProdIntermedio) {
+//             console.log('️️ CodProdIntermedio NO resuelto todavía.');
+//         } else {
+//             console.log('🔎 CodProdIntermedio resuelto:', codProdIntermedio);
+//         }
+
+//         // ---------- PASO 4: FICHA DEL ENTRANTE (VB: Cargar_Datos_Cabecera) ----------
+//         let entrante = { Familia: '', Aleacion: '', Temple: '', Espesor: '', PaisOrigen: '', Recubrimiento: '', Calidad: '' };
+//         const mapaFichaLocal = (f) => ({
+//             Familia: getCol(f, 'Familia', ''), Aleacion: getCol(f, 'Aleacion', ''),
+//             Temple: getCol(f, 'Temple', ''),
+//             Espesor: `Max:${getCol(f, 'EspesorMax', '')}/Min:${getCol(f, 'EspesorMin', '')}`,
+//             Calidad: getCol(f, 'CalidadOri', ''), PaisOrigen: getCol(f, 'Origen', ''),
+//             Recubrimiento: getCol(f, 'Recubrimiento', '')
+//         });
+//         const mapaPPP = (p, familiaCompleta) => ({
+//             Familia: familiaCompleta ? getCol(p, 'Material', '') : String(getCol(p, 'Material', '')).substring(8, 2),
+//             Aleacion: getCol(p, 'Aleacion', ''), Temple: getCol(p, 'Temple', ''),
+//             Espesor: String(getCol(p, 'Espesor', '')), Calidad: getCol(p, 'Calidad', ''),
+//             PaisOrigen: getCol(p, 'PropioTercero', ''), Recubrimiento: getCol(p, 'Cobertura', '')
+//         });
+
+//         const tipoIntermedio = codProdIntermedio.length >= 7 ? codProdIntermedio.substring(5, 2) : '';
+//         if (tipoIntermedio === 'MP' || tipoIntermedio === 'PT') {
+//             let f = null;
+//             try {
+//                 f = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+//             } catch (e) { console.warn('⚠️ SP_TraerFichaTecnica:', e.message); }
+//             if (f?.length) entrante = mapaFichaLocal(f[0]);
+//             else if (pppRow) entrante = mapaPPP(pppRow, false);
+//         } else {
+//             if (pppRow) entrante = mapaPPP(pppRow, true);
+//             else if (codProdIntermedio) {
+//                 try {
+//                     const f = await dbRegistracionNET.raw("EXEC SP_TraerFichaTecnica @CodProd=?", [codProdIntermedio]);
+//                     if (f?.length) entrante = mapaFichaLocal(f[0]);
+//                 } catch (e) { console.warn('⚠️ SP_TraerFichaTecnica fallback:', e.message); }
+//             }
+//         }
+
+//         // ---------- PASO 5: Notas Calipso ----------
+//         let tieneNotasCalipso = false;
+//         try {
+//             const [nmR, nvR, mbR] = await Promise.all([
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasMatchingCalipso @OperacionID=?", [operacionId]),
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerNotasCalipso @LoteID=?", [loteMain]),
+//                 dbSintecromDesa.raw("EXEC SP_REG_TraerMotivoBloqueo @Operacion_id=?", [operacionId])
+//             ]);
+//             const nm = nmR?.[0] || {}, nv = nvR?.[0] || {}, mb = mbR?.[0] || {};
+//             if (getCol(nm, 'NotasOperacion', '')?.trim?.() || getCol(nv, 'NotasCalidad', '')?.trim?.() ||
+//                 getCol(nv, 'NotasVarias', '')?.trim?.() || getCol(mb, 'MotivoBloqueo', '')?.trim?.()) tieneNotasCalipso = true;
+//         } catch (e) { console.warn('⚠️ Notas Calipso:', e.message); }
+//         // ---------- PASO 5b: SCRAP (✅ VB Genero_Linea con EsScrap=true) ----------
+//         const SCRAP_KEY = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
+//         let scrapSeriado = 0, scrapNoSeriado = 0, scrapBruto = 0, scrapAtados = 0, scrapRollos = 0;
+//         try {
+//             let rawScr = asArray(await dbRegistracionNET.raw(
+//                 "EXEC SP_TraerOperacionesRegistradasPlancha @Operacion_ID=?, @ItemPedido_ID=?, @Sobrante=?",
+//                 [operacionesAProcesar[0], SCRAP_KEY, 2]));
+//             if (!rawScr.length) {
+//                 rawScr = asArray(await dbRegistracionNET.raw(
+//                     `SELECT * FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = 2`,
+//                     [operacionesAProcesar[0]]));
+//             }
+//             rawScr.forEach(s => {
+//                 const kilos = toFloat(getCol(s, 'Kilos_Sobreorden')) + toFloat(getCol(s, 'Kilos_Calidad'));
+//                 const rs = String(getCol(s, 'RetornaStock', '') || '').toUpperCase();
+//                 if (rs === 'Z') scrapNoSeriado += kilos; else scrapSeriado += kilos;
+//                 scrapBruto += toFloat(getCol(s, 'Kilos_Bruto'));
+//             });
+//             const totScr = asArray(await dbRegistracionNET.raw(
+//                 "EXEC SP_TotalizarAtadosRegistradosPlancha @Operacion_ID=?, @ItemPedido_ID=?, @Sobrante=?",
+//                 [operacionesAProcesar[0], SCRAP_KEY, 2]));
+//             if (totScr?.length) {
+//                 scrapAtados = toInt(getCol(totScr[0], 'TotalAtados'));
+//                 scrapRollos = toInt(getCol(totScr[0], 'TotalRollos'));
+//             }
+//         } catch (e) { console.warn('⚠️ Lectura scrap EMB:', e.message); }
+//         console.log(`🗑️ SCRAP EMB: seriado=${scrapSeriado} noSeriado=${scrapNoSeriado} atados=${scrapAtados} rollos=${scrapRollos} bruto=${scrapBruto}`);
+//         // ---------- PASO 6: Response ----------
+//         const totalSO    = lineasFinales.reduce((s, l) => s + l.SobreOrden, 0);
+//         const totalCal   = lineasFinales.reduce((s, l) => s + l.Calidad, 0);
+//         const totalBruto = lineasFinales.reduce((s, l) => s + l.Bruto, 0);
+
+//         res.json({
+//             header: {
+//                 Clientes: getCol(corteMain, 'ClientePedido', 'N/A'),
+//                 SerieLote: serieLoteVB || getCol(corteMain, 'Origen_lote', 'N/A'),
+//                 Matching: String(getCol(corteMain, 'Nro_Matching', '') || '').trim(),
+//                 Batch: batchVB,
+//                 Stock: 0,
+//                 KgsProgramados: totalProgramado,
+//                 CodProdPedido: getCol(primerCorte, 'CodProdPedido', ''),
+//                 CodProdFinal: getCol(primerCorte, 'CodProdPedido', ''),
+//                 CodProdIntermedio: codProdIntermedio,
+//                 CantAtados: cantAtadosHeader,     // ✅ teóricos Stock con fallback 0→1 (VB)
+//                 CantRollos: cantRollosHeader,     // ✅ idem
+//                 ...entrante,
+//                 Ancho: toFloat(getCol(corteMain, 'Operacion_TotalAncho')),
+//                 tieneNotasCalipso
+//             },
+//             lineas: lineasFinales,
+//             balance: {
+//              kgsEntrantes: dPesadaTot,
+//              programados: totalProgramado,
+//              sobreOrden: totalSO,
+//              calidad: totalCal,
+//              sobrante: 0,
+//              scrap: scrapSeriado + scrapNoSeriado,
+//              scrapSeriado,
+//              scrapNoSeriado,
+//              scrapAtados,
+//              scrapRollos,
+//              scrapBruto,
+//              saldo: dPesadaTot - totalSO - totalCal - (scrapSeriado + scrapNoSeriado),
+//              bruto: totalBruto
+//             }
+//         });
+//     } catch (error) {
+//         console.error('❌ Error en getDetalleOperacionEmbalaje:', error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ============================================================================
-// getDetalleOperacionEmbalaje - FINAL v2 (paridad VB frmDetalleEmbalaje)
+// getDetalleOperacionEmbalaje - FINAL v3 (paridad VB frmDetalleEmbalaje)
 //   ✅ Header Cant.Atados/Cant.Rollos = TEÓRICOS de Stock del lote entrante
-//      (VB: Inicial.iCantidadPaquetes/iCantidadRollos, celdas CantidadPaquetes/
-//      CantidadRollos de la grilla de operaciones, con fallback 0→1).
-//   ✅ Tot.Atados/Tot.Rollos por línea = SP_TotalizarAtadosRegistradosPlancha
-//      (@Operacion_ID, @ItemPedido_ID, @Sobrante), igual que Genero_Linea del VB.
+//      (VB: Inicial.iCantidadPaquetes/iCantidadRollos, con fallback 0→1).
+//   ✅ Header Stock = Stock.KgsCalipso del lote entrante (VB: Inicial.dStock / lblStock).
+//   ✅ Tot.Atados/Tot.Rollos por línea = SP_TotalizarAtadosRegistradosPlancha.
 //   ✅ Tarjeta de línea = teóricos CRUDOS (sin || 1), como el VB (muestra 0/0).
 // ============================================================================
 const getDetalleOperacionEmbalaje = async (req, res) => {
@@ -2753,7 +3166,6 @@ const getDetalleOperacionEmbalaje = async (req, res) => {
                 }
 
                 // ✅✅ VB Genero_Linea: Tot.Atados/Tot.Rollos = SP_TotalizarAtadosRegistradosPlancha
-                //    (NO contar filas de AtadosPlancha: el SP totaliza distinto, por eso el VB da 6 y nosotros 5)
                 let totalAtados = 0, totalRollos = 0;
                 try {
                     const tot = asArray(await dbRegistracionNET.raw(
@@ -2782,7 +3194,6 @@ const getDetalleOperacionEmbalaje = async (req, res) => {
                     NumeroPedido: getCol(corte, 'NumeroPedido'),
                     NumeroItem: numeroItem,
                     NoDoc: getCol(corte, 'NumeroDocumento'),
-                    // ✅ VB: teóricos CRUDOS (la tarjeta muestra 0/0 si Calipso no generó)
                     AtadosTeoricos: toInt(getCol(corte, 'CantidadPaquetes')),
                     RollosTeoricos: toInt(getCol(corte, 'CantidadRollos')),
                     Programados: toFloat(getCol(corte, 'KilosEmbalaje')),
@@ -2801,24 +3212,34 @@ const getDetalleOperacionEmbalaje = async (req, res) => {
         const loteMain  = String(getCol(corteMain, 'Origen_Lote_ID', '') || '');
         const finalCode = String(getCol(primerCorte, 'CodProdPedido', '') || '').trim();
 
-        // ---------- PASO 2b: HEADER Cant.Atados / Cant.Rollos ----------
-        // ✅ VB: Inicial.iCantidadPaquetes / iCantidadRollos = celdas CantidadPaquetes /
-        //    CantidadRollos de la grilla de operaciones (Stock del lote entrante), con 0→1.
-        //    NO son totales registrados (por eso el VB muestra 1/1 y no 5/6).
-        let cantAtadosHeader = 0, cantRollosHeader = 0;
+        // ---------- PASO 2b: HEADER Cant.Atados / Cant.Rollos / STOCK ----------
+        // ✅ VB: Inicial.iCantidadPaquetes / iCantidadRollos / dStock = celdas de la grilla
+        //    de operaciones = tabla Stock del lote entrante
+        //    (CantidadPaquetes, CantidadRollos y KgsCalipso ← misma columna del JOIN
+        //     del SP: ISNULL(Stock.KgsCalipso,'0') AS Stock).
+        let cantAtadosHeader = 0, cantRollosHeader = 0, stockHeader = 0;
         if (loteMain) {
             try {
                 const st = asArray(await dbRegistracionNET.raw(
-                    `SELECT TOP 1 CantidadPaquetes, CantidadRollos FROM Stock WHERE Lote_ID = ?`, [loteMain]));
+                    `SELECT TOP 1 * FROM Stock WHERE Lote_ID = ?`, [loteMain]));
                 if (st?.length) {
                     cantAtadosHeader = toInt(getCol(st[0], 'CantidadPaquetes'));
                     cantRollosHeader = toInt(getCol(st[0], 'CantidadRollos'));
+                    // ✅✅ VB lblStock = Inicial.dStock = Stock.KgsCalipso
+                    const kgs = getCol(st[0], 'KgsCalipso');
+                    stockHeader = (kgs !== undefined && kgs !== null)
+                        ? toFloat(kgs)
+                        : toFloat(getCol(st[0], 'Stock', 0));
                 }
             } catch (e) { console.warn('⚠️ Stock teóricos header:', e.message); }
         }
+        // Fallback: si la tabla Stock no tiene fila, probar columnas del SP de líneas
+        if (stockHeader === 0) {
+            stockHeader = toFloat(getCol(corteMain, 'KgsCalipso', getCol(corteMain, 'Stock', 0)));
+        }
         if (cantAtadosHeader === 0) cantAtadosHeader = 1;   // VB: if (CantidadPaquetes == 0) → 1
         if (cantRollosHeader === 0) cantRollosHeader = 1;   // VB: if (CantidadRollos == 0) → 1
-        console.log(`📦 Header teóricos VB: Cant.Atados=${cantAtadosHeader} Cant.Rollos=${cantRollosHeader} (lote ${loteMain})`);
+        console.log(`📦 Header teóricos VB: Cant.Atados=${cantAtadosHeader} Cant.Rollos=${cantRollosHeader} Stock=${stockHeader} (lote ${loteMain})`);
 
         // ---------- PASO 3: CodProdIntermedio (cartel azul del ENTRANTE) ----------
         const esCodProd = (v) => typeof v === 'string' && /^\w{4}-\w{2}-\w{2}-\w{2}-\d{4}-/.test(v.trim());
@@ -3000,6 +3421,34 @@ const getDetalleOperacionEmbalaje = async (req, res) => {
                 getCol(nv, 'NotasVarias', '')?.trim?.() || getCol(mb, 'MotivoBloqueo', '')?.trim?.()) tieneNotasCalipso = true;
         } catch (e) { console.warn('⚠️ Notas Calipso:', e.message); }
 
+        // ---------- PASO 5b: SCRAP (✅ VB Genero_Linea con EsScrap=true) ----------
+        const SCRAP_KEY = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
+        let scrapSeriado = 0, scrapNoSeriado = 0, scrapBruto = 0, scrapAtados = 0, scrapRollos = 0;
+        try {
+            let rawScr = asArray(await dbRegistracionNET.raw(
+                "EXEC SP_TraerOperacionesRegistradasPlancha @Operacion_ID=?, @ItemPedido_ID=?, @Sobrante=?",
+                [operacionesAProcesar[0], SCRAP_KEY, 2]));
+            if (!rawScr.length) {
+                rawScr = asArray(await dbRegistracionNET.raw(
+                    `SELECT * FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = 2`,
+                    [operacionesAProcesar[0]]));
+            }
+            rawScr.forEach(s => {
+                const kilos = toFloat(getCol(s, 'Kilos_Sobreorden')) + toFloat(getCol(s, 'Kilos_Calidad'));
+                const rs = String(getCol(s, 'RetornaStock', '') || '').toUpperCase();
+                if (rs === 'Z') scrapNoSeriado += kilos; else scrapSeriado += kilos;
+                scrapBruto += toFloat(getCol(s, 'Kilos_Bruto'));
+            });
+            const totScr = asArray(await dbRegistracionNET.raw(
+                "EXEC SP_TotalizarAtadosRegistradosPlancha @Operacion_ID=?, @ItemPedido_ID=?, @Sobrante=?",
+                [operacionesAProcesar[0], SCRAP_KEY, 2]));
+            if (totScr?.length) {
+                scrapAtados = toInt(getCol(totScr[0], 'TotalAtados'));
+                scrapRollos = toInt(getCol(totScr[0], 'TotalRollos'));
+            }
+        } catch (e) { console.warn('⚠️ Lectura scrap EMB:', e.message); }
+        console.log(`🗑️ SCRAP EMB: seriado=${scrapSeriado} noSeriado=${scrapNoSeriado} atados=${scrapAtados} rollos=${scrapRollos} bruto=${scrapBruto}`);
+
         // ---------- PASO 6: Response ----------
         const totalSO    = lineasFinales.reduce((s, l) => s + l.SobreOrden, 0);
         const totalCal   = lineasFinales.reduce((s, l) => s + l.Calidad, 0);
@@ -3011,7 +3460,7 @@ const getDetalleOperacionEmbalaje = async (req, res) => {
                 SerieLote: serieLoteVB || getCol(corteMain, 'Origen_lote', 'N/A'),
                 Matching: String(getCol(corteMain, 'Nro_Matching', '') || '').trim(),
                 Batch: batchVB,
-                Stock: 0,
+                Stock: stockHeader,               // ✅✅ ANTES: 0 hardcodeado → ahora Stock.KgsCalipso (VB lblStock)
                 KgsProgramados: totalProgramado,
                 CodProdPedido: getCol(primerCorte, 'CodProdPedido', ''),
                 CodProdFinal: getCol(primerCorte, 'CodProdPedido', ''),
@@ -3028,8 +3477,14 @@ const getDetalleOperacionEmbalaje = async (req, res) => {
                 programados: totalProgramado,
                 sobreOrden: totalSO,
                 calidad: totalCal,
-                sobrante: 0, scrap: 0, scrapSeriado: 0,
-                saldo: dPesadaTot - totalSO - totalCal,
+                sobrante: 0,
+                scrap: scrapSeriado + scrapNoSeriado,
+                scrapSeriado,
+                scrapNoSeriado,
+                scrapAtados,
+                scrapRollos,
+                scrapBruto,
+                saldo: dPesadaTot - totalSO - totalCal - (scrapSeriado + scrapNoSeriado),
                 bruto: totalBruto
             }
         });
@@ -3038,9 +3493,6 @@ const getDetalleOperacionEmbalaje = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
-
-
-
 
 
 
@@ -5493,63 +5945,132 @@ const obtenerPaquetesEmbalaje = async (req, res) => {
 
 
 
+// const resetearPaquetesEmbalaje = async (req, res) => {
+//     const { operacionId, itemPedidoId, sobrante, idLotePlancha, lineaData } = req.body;
+
+//     console.log('🟢 resetearPaquetesEmbalaje llamado:');
+//     console.log('   operacionId:', operacionId);
+//     console.log('   itemPedidoId:', itemPedidoId);
+
+//     try {
+//         const transaction = await dbRegistracionNET.transaction();
+
+//         try {
+//             // ✅ PASO 1: Obtener TODOS los ID_LotePlancha de esta operación
+//             console.log('\n📌 Obteniendo registros existentes...');
+//             const registros = await transaction.raw(
+//                 `SELECT DISTINCT ID_LotePlancha FROM RegistracionUltimaOperacion 
+//                  WHERE Operacion_ID = ? AND Sobrante = ?`,
+//                 [operacionId, sobrante || 0]
+//             );
+
+//             console.log('   Registros encontrados:', registros.length);
+
+//             // ✅ PASO 2: Eliminar atados de cada LotePlancha
+//             for (const reg of registros) {
+//                 const lotePlancha = reg.ID_LotePlancha;
+//                 console.log('\n   🗑️ Eliminando atados para ID_LotePlancha:', lotePlancha);
+                
+//                 await transaction.raw(
+//                     `DELETE FROM AtadosPlancha 
+//                      WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
+//                     [operacionId, sobrante || 0, lotePlancha]
+//                 );
+//             }
+
+//             // ✅ PASO 3: Eliminar TODOS los registros de la operación
+//             console.log('\n   🗑️ Eliminando registros de RegistracionUltimaOperacion...');
+//             await transaction.raw(
+//                 `DELETE FROM RegistracionUltimaOperacion 
+//                  WHERE Operacion_ID = ? AND Sobrante = ?`,
+//                 [operacionId, sobrante || 0]
+//             );
+
+//             await transaction.commit();
+
+//             console.log('\n✅ Paquetes reseteados correctamente');
+//             res.status(200).json({ message: 'Paquetes reseteados correctamente' });
+
+//         } catch (error) {
+//             await transaction.rollback();
+//             console.error('❌ Error en transacción:', error);
+//             throw error;
+//         }
+
+//     } catch (error) {
+//         console.error("❌ Error en resetearPaquetesEmbalaje:", error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 const resetearPaquetesEmbalaje = async (req, res) => {
     const { operacionId, itemPedidoId, sobrante, idLotePlancha, lineaData } = req.body;
-
-    console.log('🟢 resetearPaquetesEmbalaje llamado:');
-    console.log('   operacionId:', operacionId);
-    console.log('   itemPedidoId:', itemPedidoId);
-
+    const transaction = await dbRegistracionNET.transaction();
     try {
-        const transaction = await dbRegistracionNET.transaction();
-
-        try {
-            // ✅ PASO 1: Obtener TODOS los ID_LotePlancha de esta operación
-            console.log('\n📌 Obteniendo registros existentes...');
+        if (idLotePlancha) {
+            // ✅ RESET ACOTADO a un solo lote (scrap seriado o no seriado, sin tocar el otro)
+            await transaction.raw(`DELETE FROM AtadosPlancha WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
+                [operacionId, sobrante || 0, idLotePlancha]);
+            await transaction.raw(`DELETE FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
+                [operacionId, sobrante || 0, idLotePlancha]);
+        } else {
+            // ... lógica actual de todos los lotes ...
             const registros = await transaction.raw(
-                `SELECT DISTINCT ID_LotePlancha FROM RegistracionUltimaOperacion 
-                 WHERE Operacion_ID = ? AND Sobrante = ?`,
-                [operacionId, sobrante || 0]
-            );
-
-            console.log('   Registros encontrados:', registros.length);
-
-            // ✅ PASO 2: Eliminar atados de cada LotePlancha
+                `SELECT DISTINCT ID_LotePlancha FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = ?`,
+                [operacionId, sobrante || 0]);
             for (const reg of registros) {
-                const lotePlancha = reg.ID_LotePlancha;
-                console.log('\n   🗑️ Eliminando atados para ID_LotePlancha:', lotePlancha);
-                
-                await transaction.raw(
-                    `DELETE FROM AtadosPlancha 
-                     WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
-                    [operacionId, sobrante || 0, lotePlancha]
-                );
+                await transaction.raw(`DELETE FROM AtadosPlancha WHERE Operacion_ID = ? AND Sobrante = ? AND ID_LotePlancha = ?`,
+                    [operacionId, sobrante || 0, reg.ID_LotePlancha]);
             }
-
-            // ✅ PASO 3: Eliminar TODOS los registros de la operación
-            console.log('\n   🗑️ Eliminando registros de RegistracionUltimaOperacion...');
-            await transaction.raw(
-                `DELETE FROM RegistracionUltimaOperacion 
-                 WHERE Operacion_ID = ? AND Sobrante = ?`,
-                [operacionId, sobrante || 0]
-            );
-
-            await transaction.commit();
-
-            console.log('\n✅ Paquetes reseteados correctamente');
-            res.status(200).json({ message: 'Paquetes reseteados correctamente' });
-
-        } catch (error) {
-            await transaction.rollback();
-            console.error('❌ Error en transacción:', error);
-            throw error;
+            await transaction.raw(`DELETE FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = ?`,
+                [operacionId, sobrante || 0]);
         }
-
+        await transaction.commit();
+        res.status(200).json({ message: 'Paquetes reseteados correctamente' });
     } catch (error) {
-        console.error("❌ Error en resetearPaquetesEmbalaje:", error);
+        await transaction.rollback();
         res.status(500).json({ error: error.message });
     }
 };
+
+
+
+
+
+
+
+
+
+
+
+
 
 // const registrarPaquetesEmbalaje = async (req, res) => {
 //     const { operacionId, itemPedidoId, loteIds, sobrante, atados, lineaData, usuario } = req.body;
@@ -8200,6 +8721,681 @@ const validarCierre = async (req, res) => {
     }
 };
 
+// // ============================================================================
+// // SCRAP SERIADO - Registrar
+// // ============================================================================
+// const registrarScrapSeriado = async (req, res) => {
+//     const { operacionId, itemPedidoId, numeroItem, idLotePlancha, serieLote, 
+//             atados, usuario } = req.body;
+    
+//     console.log('🟢 registrarScrapSeriado');
+//     console.log('   operacionId:', operacionId);
+//     console.log('   idLotePlancha:', idLotePlancha);
+//     console.log('   Cantidad de atados:', atados?.length || 0);
+    
+//     const transaction = await dbRegistracionNET.transaction();
+//     try {
+//         const [opInfo] = await transaction.raw(
+//             `SELECT Maquina, NroBatch, Codigo_Producto, Origen_Lote, Origen_Lote_ID, 
+//                     Operacion_Cuchillas, Nro_Matching, Tarea, KilosProgramadosEntrantes, 
+//                     ItemPedido_ID 
+//              FROM OperacionesCalipso WHERE Operacion_ID = ?`,
+//             [operacionId]
+//         );
+        
+//         if (!opInfo) throw new Error("No se encontró información de la operación");
+        
+//         const numeroItemInt = parseInt(numeroItem) || 1;
+//         const fechaReg = new Date().toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
+        
+//         // Calcular totales
+//         let totalKilos = 0;
+//         let totalAtados = 0;
+//         let totalRollos = 0;
+        
+//         for (const atado of atados) {
+//             totalKilos += parseFloat(atado.peso) || 0;
+//             totalAtados += 1;
+//             totalRollos += parseInt(atado.rollos) || 0;
+//         }
+        
+//         // 1. Eliminar registros previos de este scrap
+//         await transaction.raw(
+//             `DELETE FROM AtadosPlancha 
+//              WHERE Operacion_ID = ? AND Sobrante = 2 AND ID_LotePlancha = ?`,
+//             [operacionId, idLotePlancha]
+//         );
+        
+//         await transaction.raw(
+//             `DELETE FROM RegistracionUltimaOperacion 
+//              WHERE Operacion_ID = ? AND Sobrante = 2 AND ID_LotePlancha = ?`,
+//             [operacionId, idLotePlancha]
+//         );
+        
+//         // 2. Insertar atados
+//         for (let i = 0; i < atados.length; i++) {
+//             const atado = atados[i];
+//             await transaction.raw(
+//                 `EXEC SP_InsertarAtadosPlancha 
+//                  @Operacion_ID=?, @NumeroItem=?, @Atado=?, @Rollos=?,
+//                  @Sobrante=?, @Peso=?, @Calidad=?, @ID_LotePlancha=?, @Etiqueta=?`,
+//                 [
+//                     operacionId,
+//                     String(numeroItemInt),
+//                     parseInt(atado.atado) || (i + 1),
+//                     parseInt(atado.rollos) || 0,
+//                     2, // Sobrante = 2 (Scrap)
+//                     atado.peso,
+//                     atado.esCalidad ? 1 : 0,
+//                     idLotePlancha,
+//                     parseInt(atado.nroEtiqueta) || 0
+//                 ]
+//             );
+//         }
+        
+//         // 3. Insertar registro principal
+//         await transaction.raw(
+//             `EXEC SP_InsertarRegistracionPlancha 
+//              @Operacion_ID=?, @Tarea=?, @Maquina=?, @NroBatch=?, @Cuchillas=?,
+//              @CodProducto=?, @CodProductoS=?, @Lote_ID=?, @KilosProgramados=?,
+//              @KilosSobreOrden=?, @KilosCalidad=?, @Estado=?, @Sobrante=?,
+//              @ACalidad=?, @LotePlanchaDesc=?, @Nro_Matching=?, @ItemPedido_ID=?,
+//              @NumeroItem=?, @Kilos_Bruto=?, @ACalidadSO=?, @Atados=?, @Rollos=?,
+//              @ID_LotePlancha=?, @CodSerie=?, @CodLote=?, @Usuario=?, @FechaReg=?,
+//              @RetornaStock=?`,
+//             [
+//                 operacionId,
+//                 opInfo.Tarea || 'Embalaje',
+//                 'EMB',
+//                 opInfo.NroBatch || '',
+//                 opInfo.Operacion_Cuchillas || '',
+//                 opInfo.Codigo_Producto || '',
+//                 '',
+//                 opInfo.Origen_Lote_ID || '',
+//                 parseFloat(opInfo.KilosProgramadosEntrantes) || 0,
+//                 totalKilos, // Scrap va en SobreOrden
+//                 0,
+//                 '1',
+//                 2, // Sobrante = 2 (Scrap)
+//                 '0',
+//                 serieLote || 'Scrap Seriado',
+//                 opInfo.Nro_Matching || '',
+//                 itemPedidoId || opInfo.ItemPedido_ID,
+//                 numeroItemInt,
+//                 totalKilos, // Bruto = Neto en scrap
+//                 '0',
+//                 totalAtados,
+//                 totalRollos,
+//                 idLotePlancha,
+//                 '',
+//                 '',
+//                 usuario || 'sistema',
+//                 fechaReg,
+//                 'N'
+//             ]
+//         );
+        
+//         await transaction.commit();
+//         console.log('✅ Scrap Seriado registrado correctamente');
+//         res.status(200).json({ 
+//             message: 'Scrap Seriado registrado correctamente',
+//             totales: { kilos: totalKilos, atados: totalAtados, rollos: totalRollos }
+//         });
+        
+//     } catch (error) {
+//         await transaction.rollback();
+//         console.error('❌ Error registrarScrapSeriado:', error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+// // ============================================================================
+// // SCRAP NO SERIADO - Registrar
+// // ============================================================================
+// const registrarScrapNoSeriado = async (req, res) => {
+//     const { operacionId, itemPedidoId, numeroItem, atados, usuario } = req.body;
+    
+//     // GUID fijo para Scrap No Seriado
+//     const SCRAP_NO_SERIADO_GUID = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
+    
+//     console.log('🟢 registrarScrapNoSeriado');
+//     console.log('   operacionId:', operacionId);
+    
+//     const transaction = await dbRegistracionNET.transaction();
+//     try {
+//         const [opInfo] = await transaction.raw(
+//             `SELECT Maquina, NroBatch, Codigo_Producto, Origen_Lote, Origen_Lote_ID, 
+//                     Operacion_Cuchillas, Nro_Matching, Tarea, KilosProgramadosEntrantes, 
+//                     ItemPedido_ID 
+//              FROM OperacionesCalipso WHERE Operacion_ID = ?`,
+//             [operacionId]
+//         );
+        
+//         if (!opInfo) throw new Error("No se encontró información de la operación");
+        
+//         const numeroItemInt = parseInt(numeroItem) || 1;
+//         const fechaReg = new Date().toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
+        
+//         // Calcular totales
+//         let totalKilos = 0;
+//         let totalAtados = 0;
+//         let totalRollos = 0;
+        
+//         for (const atado of atados) {
+//             totalKilos += parseFloat(atado.peso) || 0;
+//             totalAtados += 1;
+//             totalRollos += parseInt(atado.rollos) || 0;
+//         }
+        
+//         // 1. Eliminar registros previos de scrap no seriado
+//         await transaction.raw(
+//             `DELETE FROM AtadosPlancha 
+//              WHERE Operacion_ID = ? AND Sobrante = 2 AND ID_LotePlancha = ?`,
+//             [operacionId, SCRAP_NO_SERIADO_GUID]
+//         );
+        
+//         await transaction.raw(
+//             `DELETE FROM RegistracionUltimaOperacion 
+//              WHERE Operacion_ID = ? AND Sobrante = 2 AND ID_LotePlancha = ?`,
+//             [operacionId, SCRAP_NO_SERIADO_GUID]
+//         );
+        
+//         // 2. Insertar atados
+//         for (let i = 0; i < atados.length; i++) {
+//             const atado = atados[i];
+//             await transaction.raw(
+//                 `EXEC SP_InsertarAtadosPlancha 
+//                  @Operacion_ID=?, @NumeroItem=?, @Atado=?, @Rollos=?,
+//                  @Sobrante=?, @Peso=?, @Calidad=?, @ID_LotePlancha=?, @Etiqueta=?`,
+//                 [
+//                     operacionId,
+//                     String(numeroItemInt),
+//                     parseInt(atado.atado) || (i + 1),
+//                     parseInt(atado.rollos) || 0,
+//                     2, // Sobrante = 2 (Scrap)
+//                     atado.peso,
+//                     atado.esCalidad ? 1 : 0,
+//                     SCRAP_NO_SERIADO_GUID,
+//                     parseInt(atado.nroEtiqueta) || 0
+//                 ]
+//             );
+//         }
+        
+//         // 3. Insertar registro principal
+//         await transaction.raw(
+//             `EXEC SP_InsertarRegistracionPlancha 
+//              @Operacion_ID=?, @Tarea=?, @Maquina=?, @NroBatch=?, @Cuchillas=?,
+//              @CodProducto=?, @CodProductoS=?, @Lote_ID=?, @KilosProgramados=?,
+//              @KilosSobreOrden=?, @KilosCalidad=?, @Estado=?, @Sobrante=?,
+//              @ACalidad=?, @LotePlanchaDesc=?, @Nro_Matching=?, @ItemPedido_ID=?,
+//              @NumeroItem=?, @Kilos_Bruto=?, @ACalidadSO=?, @Atados=?, @Rollos=?,
+//              @ID_LotePlancha=?, @CodSerie=?, @CodLote=?, @Usuario=?, @FechaReg=?,
+//              @RetornaStock=?`,
+//             [
+//                 operacionId,
+//                 opInfo.Tarea || 'Embalaje',
+//                 'EMB',
+//                 opInfo.NroBatch || '',
+//                 opInfo.Operacion_Cuchillas || '',
+//                 opInfo.Codigo_Producto || '',
+//                 '',
+//                 opInfo.Origen_Lote_ID || '',
+//                 parseFloat(opInfo.KilosProgramadosEntrantes) || 0,
+//                 totalKilos,
+//                 0,
+//                 '1',
+//                 2, // Sobrante = 2 (Scrap)
+//                 '0',
+//                 'Scrap No Seriado',
+//                 opInfo.Nro_Matching || '',
+//                 itemPedidoId || opInfo.ItemPedido_ID,
+//                 numeroItemInt,
+//                 totalKilos,
+//                 '0',
+//                 totalAtados,
+//                 totalRollos,
+//                 SCRAP_NO_SERIADO_GUID,
+//                 '',
+//                 '',
+//                 usuario || 'sistema',
+//                 fechaReg,
+//                 'Z' // RetornaStock = 'Z' para No Seriado
+//             ]
+//         );
+        
+//         await transaction.commit();
+//         console.log('✅ Scrap No Seriado registrado correctamente');
+//         res.status(200).json({ 
+//             message: 'Scrap No Seriado registrado correctamente',
+//             totales: { kilos: totalKilos, atados: totalAtados, rollos: totalRollos }
+//         });
+        
+//     } catch (error) {
+//         await transaction.rollback();
+//         console.error('❌ Error registrarScrapNoSeriado:', error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
+
+
+
+
+
+// // ============================================================================
+// // SCRAP SERIADO - Registrar (✅ PARIDAD VB: Búsqueda de Lote Disponible)
+// // ============================================================================
+// const registrarScrapSeriado = async (req, res) => {
+//     const { operacionId, itemPedidoId, numeroItem, idLotePlancha, serieLote, atados, usuario } = req.body;
+//     const SCRAP_KEY = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7'; // ✅ VB: Inicial.sPedidoID para scrap
+
+//     const transaction = await dbRegistracionNET.transaction();
+//     try {
+//         const [opInfo] = await transaction.raw(
+//             `SELECT Maquina, NroBatch, Codigo_Producto, Origen_Lote, Origen_Lote_ID,
+//                     Operacion_Cuchillas, Nro_Matching, Tarea, KilosProgramadosEntrantes, ItemPedido_ID
+//              FROM OperacionesCalipso WHERE Operacion_ID = ?`, [operacionId]);
+//         if (!opInfo) throw new Error("No se encontró información de la operación");
+
+//         const fechaReg = new Date().toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
+//         const serieOrigen = String(opInfo.Origen_Lote || '').trim();
+//         const codSerie = serieOrigen.substring(0, 6);
+//         const codLote = serieOrigen.length > 10 ? serieOrigen.substring(8, 12) : (serieOrigen.length >= 10 ? serieOrigen.substring(8, 10) : '');
+
+//         let totalKilos = 0, totalAtados = 0, totalRollos = 0;
+//         (atados || []).forEach(a => { totalKilos += parseFloat(a.peso) || 0; totalAtados += 1; totalRollos += parseInt(a.rollos) || 0; });
+
+//         // ✅ Búsqueda de Lote Disponible de Merma (Paridad VB: SP_TraerLotesDisponiblesScrap)
+//         let idLotePlanchaFinal = idLotePlancha;
+//         let lotePlanchaDesc = serieLote || 'Scrap Seriado';
+
+//         if (!idLotePlanchaFinal) {
+//             const [loteDisp] = await transaction.raw(
+//                 `EXEC SP_TraerLotesDisponiblesScrap @CodSerie=?`, [codSerie]
+//             );
+//             if (loteDisp) {
+//                 idLotePlanchaFinal = loteDisp.Lote_IDS;
+//                 lotePlanchaDesc = loteDisp.Destino_Lote || lotePlanchaDesc;
+//             } else {
+//                 throw new Error("No se han programado kilos de Merma. NO puede registrar por Scrap");
+//             }
+//         }
+
+//         // Limpieza previa de este lote de merma
+//         await transaction.raw(`DELETE FROM AtadosPlancha WHERE Operacion_ID = ? AND Sobrante = 2 AND ID_LotePlancha = ?`, [operacionId, idLotePlanchaFinal]);
+//         await transaction.raw(`DELETE FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = 2 AND ID_LotePlancha = ?`, [operacionId, idLotePlanchaFinal]);
+
+//         // Atados (✅ VB: NumeroItem = 0 para scrap)
+//         for (let i = 0; i < (atados || []).length; i++) {
+//             const a = atados[i];
+//             await transaction.raw(
+//                 `EXEC SP_InsertarAtadosPlancha
+//                  @Operacion_ID=?, @NumeroItem=?, @Atado=?, @Rollos=?,
+//                  @Sobrante=?, @Peso=?, @Calidad=?, @ID_LotePlancha=?, @Etiqueta=?`,
+//                 [operacionId, 0, parseInt(a.atado) || (i + 1), parseInt(a.rollos) || 0, 2, a.peso, a.esCalidad ? 1 : 0, idLotePlanchaFinal, parseInt(a.nroEtiqueta) || 0]);
+//         }
+
+//         // Registro principal 
+//         await transaction.raw(
+//             `EXEC SP_InsertarRegistracionPlancha
+//              @Operacion_ID=?, @Tarea=?, @Maquina=?, @NroBatch=?, @Cuchillas=?,
+//              @CodProducto=?, @CodProductoS=?, @Lote_ID=?, @KilosProgramados=?,
+//              @KilosSobreOrden=?, @KilosCalidad=?, @Estado=?, @Sobrante=?,
+//              @ACalidad=?, @LotePlanchaDesc=?, @Nro_Matching=?, @ItemPedido_ID=?,
+//              @NumeroItem=?, @Kilos_Bruto=?, @ACalidadSO=?, @Atados=?, @Rollos=?,
+//              @ID_LotePlancha=?, @CodSerie=?, @CodLote=?, @Usuario=?, @FechaReg=?,
+//              @RetornaStock=?`,
+//             [operacionId, opInfo.Tarea || 'Embalaje', 'EMB', opInfo.NroBatch || '', opInfo.Operacion_Cuchillas || '',
+//              opInfo.Codigo_Producto || '', '', opInfo.Origen_Lote_ID || '', parseFloat(opInfo.KilosProgramadosEntrantes) || 0,
+//              totalKilos, 0, '1', 2, '0', lotePlanchaDesc, opInfo.Nro_Matching || '',
+//              SCRAP_KEY, 0, totalKilos, '0', totalAtados, totalRollos,
+//              idLotePlanchaFinal, codSerie, codLote, usuario || 'sistema', fechaReg, 'S']);
+
+//         // ✅ VB: marca el lote de merma como usado
+//         try { await transaction.raw(`EXEC SP_EditarLotesDisponiblesScrap @Lote_IDS=?, @Usado=?`, [idLotePlanchaFinal, 1]); } catch (e) {}
+
+//         await transaction.commit();
+//         console.log(`✅ Scrap Seriado OK | op=${operacionId} | ItemPedido_ID=${SCRAP_KEY} | NumeroItem=0 | kilos=${totalKilos}`);
+//         res.status(200).json({ message: 'Scrap Seriado registrado correctamente', totales: { kilos: totalKilos, atados: totalAtados, rollos: totalRollos } });
+//     } catch (error) {
+//         await transaction.rollback();
+//         console.error('❌ Error registrarScrapSeriado:', error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+// // ============================================================================
+// // SCRAP NO SERIADO - Registrar (✅ PARIDAD VB)
+// // ============================================================================
+// const registrarScrapNoSeriado = async (req, res) => {
+//     const { operacionId, itemPedidoId, numeroItem, atados, usuario } = req.body;
+//     const SCRAP_KEY = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
+
+//     const transaction = await dbRegistracionNET.transaction();
+//     try {
+//         const [opInfo] = await transaction.raw(
+//             `SELECT Maquina, NroBatch, Codigo_Producto, Origen_Lote, Origen_Lote_ID,
+//                     Operacion_Cuchillas, Nro_Matching, Tarea, KilosProgramadosEntrantes, ItemPedido_ID
+//              FROM OperacionesCalipso WHERE Operacion_ID = ?`, [operacionId]);
+//         if (!opInfo) throw new Error("No se encontró información de la operación");
+
+//         const fechaReg = new Date().toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
+//         const serieOrigen = String(opInfo.Origen_Lote || '').trim();
+//         const codSerie = serieOrigen.substring(0, 6);
+//         const codLote = serieOrigen.length > 10 ? serieOrigen.substring(8, 12) : (serieOrigen.length >= 10 ? serieOrigen.substring(8, 10) : '');
+
+//         let totalKilos = 0, totalAtados = 0, totalRollos = 0;
+//         (atados || []).forEach(a => { totalKilos += parseFloat(a.peso) || 0; totalAtados += 1; totalRollos += parseInt(a.rollos) || 0; });
+
+//         // Para No Seriado, el ID_LotePlancha es el GUID fijo y la descripción es "Scrap No Seriado" (Igual que VB)
+//         const idLotePlanchaFinal = SCRAP_KEY;
+//         const lotePlanchaDesc = 'Scrap No Seriado';
+
+//         await transaction.raw(`DELETE FROM AtadosPlancha WHERE Operacion_ID = ? AND Sobrante = 2 AND ID_LotePlancha = ?`, [operacionId, idLotePlanchaFinal]);
+//         await transaction.raw(`DELETE FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = 2 AND ID_LotePlancha = ?`, [operacionId, idLotePlanchaFinal]);
+
+//         for (let i = 0; i < (atados || []).length; i++) {
+//             const a = atados[i];
+//             await transaction.raw(
+//                 `EXEC SP_InsertarAtadosPlancha
+//                  @Operacion_ID=?, @NumeroItem=?, @Atado=?, @Rollos=?,
+//                  @Sobrante=?, @Peso=?, @Calidad=?, @ID_LotePlancha=?, @Etiqueta=?`,
+//                 [operacionId, 0, parseInt(a.atado) || (i + 1), parseInt(a.rollos) || 0, 2, a.peso, a.esCalidad ? 1 : 0, idLotePlanchaFinal, parseInt(a.nroEtiqueta) || 0]);
+//         }
+
+//         // ✅ RetornaStock = 'Z' (así el VB lo detecta como No Seriado)
+//         await transaction.raw(
+//             `EXEC SP_InsertarRegistracionPlancha
+//              @Operacion_ID=?, @Tarea=?, @Maquina=?, @NroBatch=?, @Cuchillas=?,
+//              @CodProducto=?, @CodProductoS=?, @Lote_ID=?, @KilosProgramados=?,
+//              @KilosSobreOrden=?, @KilosCalidad=?, @Estado=?, @Sobrante=?,
+//              @ACalidad=?, @LotePlanchaDesc=?, @Nro_Matching=?, @ItemPedido_ID=?,
+//              @NumeroItem=?, @Kilos_Bruto=?, @ACalidadSO=?, @Atados=?, @Rollos=?,
+//              @ID_LotePlancha=?, @CodSerie=?, @CodLote=?, @Usuario=?, @FechaReg=?,
+//              @RetornaStock=?`,
+//             [operacionId, opInfo.Tarea || 'Embalaje', 'EMB', opInfo.NroBatch || '', opInfo.Operacion_Cuchillas || '',
+//              opInfo.Codigo_Producto || '', '', opInfo.Origen_Lote_ID || '', parseFloat(opInfo.KilosProgramadosEntrantes) || 0,
+//              totalKilos, 0, '1', 2, '0', lotePlanchaDesc, opInfo.Nro_Matching || '',
+//              SCRAP_KEY, 0, totalKilos, '0', totalAtados, totalRollos,
+//              idLotePlanchaFinal, codSerie, codLote, usuario || 'sistema', fechaReg, 'Z']);
+
+//         await transaction.commit();
+//         console.log(`✅ Scrap No Seriado OK | op=${operacionId} | ItemPedido_ID=${SCRAP_KEY} | NumeroItem=0 | kilos=${totalKilos}`);
+//         res.status(200).json({ message: 'Scrap No Seriado registrado correctamente', totales: { kilos: totalKilos, atados: totalAtados, rollos: totalRollos } });
+//     } catch (error) {
+//         await transaction.rollback();
+//         console.error('❌ Error registrarScrapNoSeriado:', error);
+//         res.status(500).json({ error: error.message });
+//     }
+// };
+
+
+
+
+
+
+// ============================================================================
+// SCRAP SERIADO - Registrar
+// ============================================================================
+const registrarScrapSeriado = async (req, res) => {
+    const { operacionId, itemPedidoId, numeroItem, idLotePlancha, serieLote, atados, usuario } = req.body;
+    const SCRAP_KEY = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
+
+    const transaction = await dbRegistracionNET.transaction();
+    try {
+        const [opInfo] = await transaction.raw(
+            `SELECT Maquina, NroBatch, Codigo_Producto, Origen_Lote, Origen_Lote_ID,
+                    Operacion_Cuchillas, Nro_Matching, Tarea, KilosProgramadosEntrantes, ItemPedido_ID
+             FROM OperacionesCalipso WHERE Operacion_ID = ?`, [operacionId]);
+        if (!opInfo) throw new Error("No se encontró información de la operación");
+
+        const fechaReg = new Date().toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
+        const serieOrigen = String(opInfo.Origen_Lote || '').trim();
+        const codSerie = serieOrigen.substring(0, 6);
+        const codLote = serieOrigen.length > 10 ? serieOrigen.substring(8, 12) : (serieOrigen.length >= 10 ? serieOrigen.substring(8, 10) : '');
+
+        let totalKilos = 0, totalAtados = 0, totalRollos = 0;
+        (atados || []).forEach(a => { 
+            totalKilos += parseFloat(a.peso) || 0; 
+            totalAtados += 1; 
+            totalRollos += parseInt(a.rollos) || 0; 
+        });
+
+        let idLotePlanchaFinal = idLotePlancha;
+        let lotePlanchaDesc = serieLote || 'Scrap Seriado';
+
+        // Si no se proporcionó ID, buscar lote disponible
+        if (!idLotePlanchaFinal) {
+            try {
+                const loteDisp = await transaction.raw(
+                    `EXEC SP_TraerLotesDisponiblesScrap @CodSerie=?`, [codSerie]
+                );
+                if (loteDisp && loteDisp.length > 0) {
+                    idLotePlanchaFinal = loteDisp[0].Lote_IDS;
+                    lotePlanchaDesc = loteDisp[0].Destino_Lote || lotePlanchaDesc;
+                }
+            } catch (e) {
+                console.warn('No se pudo obtener lote disponible de merma:', e.message);
+            }
+        }
+
+        if (!idLotePlanchaFinal) {
+            throw new Error("No se ha proporcionado o encontrado un ID de Lote para Scrap Seriado");
+        }
+
+        // Limpieza previa
+        await transaction.raw(
+            `DELETE FROM AtadosPlancha WHERE Operacion_ID = ? AND Sobrante = 2 AND ID_LotePlancha = ?`, 
+            [operacionId, idLotePlanchaFinal]
+        );
+        await transaction.raw(
+            `DELETE FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = 2 AND ID_LotePlancha = ?`, 
+            [operacionId, idLotePlanchaFinal]
+        );
+
+        // Insertar atados
+        for (let i = 0; i < (atados || []).length; i++) {
+            const a = atados[i];
+            await transaction.raw(
+                `EXEC SP_InsertarAtadosPlancha
+                 @Operacion_ID=?, @NumeroItem=?, @Atado=?, @Rollos=?,
+                 @Sobrante=?, @Peso=?, @Calidad=?, @ID_LotePlancha=?, @Etiqueta=?`,
+                [operacionId, 0, parseInt(a.atado) || (i + 1), parseInt(a.rollos) || 0, 
+                 2, a.peso, a.esCalidad ? 1 : 0, idLotePlanchaFinal, parseInt(a.nroEtiqueta) || 0]
+            );
+        }
+
+        // Insertar registro principal
+        await transaction.raw(
+            `EXEC SP_InsertarRegistracionPlancha
+             @Operacion_ID=?, @Tarea=?, @Maquina=?, @NroBatch=?, @Cuchillas=?,
+             @CodProducto=?, @CodProductoS=?, @Lote_ID=?, @KilosProgramados=?,
+             @KilosSobreOrden=?, @KilosCalidad=?, @Estado=?, @Sobrante=?,
+             @ACalidad=?, @LotePlanchaDesc=?, @Nro_Matching=?, @ItemPedido_ID=?,
+             @NumeroItem=?, @Kilos_Bruto=?, @ACalidadSO=?, @Atados=?, @Rollos=?,
+             @ID_LotePlancha=?, @CodSerie=?, @CodLote=?, @Usuario=?, @FechaReg=?,
+             @RetornaStock=?`,
+            [operacionId, opInfo.Tarea || 'Embalaje', 'EMB', opInfo.NroBatch || '', opInfo.Operacion_Cuchillas || '',
+             opInfo.Codigo_Producto || '', '', opInfo.Origen_Lote_ID || '', parseFloat(opInfo.KilosProgramadosEntrantes) || 0,
+             totalKilos, 0, '1', 2, '0', lotePlanchaDesc, opInfo.Nro_Matching || '',
+             SCRAP_KEY, 0, totalKilos, '0', totalAtados, totalRollos,
+             idLotePlanchaFinal, codSerie, codLote, usuario || 'sistema', fechaReg, 'S']
+        );
+
+        // Marcar lote como usado
+        try { 
+            await transaction.raw(`EXEC SP_EditarLotesDisponiblesScrap @Lote_IDS=?, @Usado=?`, [idLotePlanchaFinal, 1]); 
+        } catch (e) {
+            console.warn('No se pudo marcar lote como usado:', e.message);
+        }
+
+        await transaction.commit();
+        console.log(`✅ Scrap Seriado registrado: op=${operacionId}, kilos=${totalKilos}`);
+        res.status(200).json({ 
+            message: 'Scrap Seriado registrado correctamente', 
+            totales: { kilos: totalKilos, atados: totalAtados, rollos: totalRollos } 
+        });
+    } catch (error) {
+        await transaction.rollback();
+        console.error('❌ Error registrarScrapSeriado:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// ============================================================================
+// SCRAP NO SERIADO - Registrar
+// ============================================================================
+const registrarScrapNoSeriado = async (req, res) => {
+    const { operacionId, itemPedidoId, numeroItem, atados, usuario } = req.body;
+    const SCRAP_KEY = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
+
+    const transaction = await dbRegistracionNET.transaction();
+    try {
+        const [opInfo] = await transaction.raw(
+            `SELECT Maquina, NroBatch, Codigo_Producto, Origen_Lote, Origen_Lote_ID,
+                    Operacion_Cuchillas, Nro_Matching, Tarea, KilosProgramadosEntrantes, ItemPedido_ID
+             FROM OperacionesCalipso WHERE Operacion_ID = ?`, [operacionId]);
+        if (!opInfo) throw new Error("No se encontró información de la operación");
+
+        const fechaReg = new Date().toLocaleString("sv-SE", { timeZone: "America/Argentina/Buenos_Aires" });
+        const serieOrigen = String(opInfo.Origen_Lote || '').trim();
+        const codSerie = serieOrigen.substring(0, 6);
+        const codLote = serieOrigen.length > 10 ? serieOrigen.substring(8, 12) : (serieOrigen.length >= 10 ? serieOrigen.substring(8, 10) : '');
+
+        let totalKilos = 0, totalAtados = 0, totalRollos = 0;
+        (atados || []).forEach(a => { 
+            totalKilos += parseFloat(a.peso) || 0; 
+            totalAtados += 1; 
+            totalRollos += parseInt(a.rollos) || 0; 
+        });
+
+        const idLotePlanchaFinal = SCRAP_KEY;
+        const lotePlanchaDesc = 'Scrap No Seriado';
+
+        // Limpieza previa
+        await transaction.raw(
+            `DELETE FROM AtadosPlancha WHERE Operacion_ID = ? AND Sobrante = 2 AND ID_LotePlancha = ?`, 
+            [operacionId, idLotePlanchaFinal]
+        );
+        await transaction.raw(
+            `DELETE FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = 2 AND ID_LotePlancha = ?`, 
+            [operacionId, idLotePlanchaFinal]
+        );
+
+        // Insertar atados
+        for (let i = 0; i < (atados || []).length; i++) {
+            const a = atados[i];
+            await transaction.raw(
+                `EXEC SP_InsertarAtadosPlancha
+                 @Operacion_ID=?, @NumeroItem=?, @Atado=?, @Rollos=?,
+                 @Sobrante=?, @Peso=?, @Calidad=?, @ID_LotePlancha=?, @Etiqueta=?`,
+                [operacionId, 0, parseInt(a.atado) || (i + 1), parseInt(a.rollos) || 0, 
+                 2, a.peso, a.esCalidad ? 1 : 0, idLotePlanchaFinal, parseInt(a.nroEtiqueta) || 0]
+            );
+        }
+
+        // Insertar registro principal (RetornaStock = 'Z' para No Seriado)
+        await transaction.raw(
+            `EXEC SP_InsertarRegistracionPlancha
+             @Operacion_ID=?, @Tarea=?, @Maquina=?, @NroBatch=?, @Cuchillas=?,
+             @CodProducto=?, @CodProductoS=?, @Lote_ID=?, @KilosProgramados=?,
+             @KilosSobreOrden=?, @KilosCalidad=?, @Estado=?, @Sobrante=?,
+             @ACalidad=?, @LotePlanchaDesc=?, @Nro_Matching=?, @ItemPedido_ID=?,
+             @NumeroItem=?, @Kilos_Bruto=?, @ACalidadSO=?, @Atados=?, @Rollos=?,
+             @ID_LotePlancha=?, @CodSerie=?, @CodLote=?, @Usuario=?, @FechaReg=?,
+             @RetornaStock=?`,
+            [operacionId, opInfo.Tarea || 'Embalaje', 'EMB', opInfo.NroBatch || '', opInfo.Operacion_Cuchillas || '',
+             opInfo.Codigo_Producto || '', '', opInfo.Origen_Lote_ID || '', parseFloat(opInfo.KilosProgramadosEntrantes) || 0,
+             totalKilos, 0, '1', 2, '0', lotePlanchaDesc, opInfo.Nro_Matching || '',
+             SCRAP_KEY, 0, totalKilos, '0', totalAtados, totalRollos,
+             idLotePlanchaFinal, codSerie, codLote, usuario || 'sistema', fechaReg, 'Z']
+        );
+
+        await transaction.commit();
+        console.log(`✅ Scrap No Seriado registrado: op=${operacionId}, kilos=${totalKilos}`);
+        res.status(200).json({ 
+            message: 'Scrap No Seriado registrado correctamente', 
+            totales: { kilos: totalKilos, atados: totalAtados, rollos: totalRollos } 
+        });
+    } catch (error) {
+        await transaction.rollback();
+        console.error('❌ Error registrarScrapNoSeriado:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
+// ============================================================================
+// ✅✅ NUEVO: obtenerScrapEmbalaje — lee lo YA REGISTRADO de SCRAP (Sobrante=2)
+//    Réplica de VB Genero_Linea con EsScrap=true:
+//    SP_TraerOperacionesRegistradasPlancha(op, GUID, 2) + atados de AtadosPlancha.
+//    Devuelve separados seriado / no-seriado + sus atados para los modales.
+// ============================================================================
+const obtenerScrapEmbalaje = async (req, res) => {
+    const { operacionId } = req.body;
+    const SCRAP_KEY = 'EBCEC003-0D54-49C7-9423-7E41B3D11AE7';
+    try {
+        console.log('🟢 obtenerScrapEmbalaje | op:', operacionId);
+
+        // 1) Registros principales de scrap (ambos tipos)
+        let regs = asArray(await dbRegistracionNET.raw(
+            "EXEC SP_TraerOperacionesRegistradasPlancha @Operacion_ID=?, @ItemPedido_ID=?, @Sobrante=?",
+            [operacionId, SCRAP_KEY, 2]));
+        if (!regs.length) {
+            regs = asArray(await dbRegistracionNET.raw(
+                `SELECT * FROM RegistracionUltimaOperacion WHERE Operacion_ID = ? AND Sobrante = 2`,
+                [operacionId]));
+        }
+
+        const salida = {
+            scrapSeriado: 0, scrapNoSeriado: 0, bruto: 0,
+            atadosSeriado: [], atadosNoSeriado: [],
+            atadosTotales: 0, rollosTotales: 0
+        };
+
+        for (const r of regs) {
+            const kilos = toFloat(getCol(r, 'Kilos_Sobreorden')) + toFloat(getCol(r, 'Kilos_Calidad'));
+            const rs = String(getCol(r, 'RetornaStock', '') || '').toUpperCase();
+            const idLote = String(getCol(r, 'ID_LotePlancha', '') || '');
+            const esNoSeriado = (rs === 'Z') || (idLote.toUpperCase() === SCRAP_KEY);
+            if (esNoSeriado) salida.scrapNoSeriado += kilos; else salida.scrapSeriado += kilos;
+            salida.bruto += toFloat(getCol(r, 'Kilos_Bruto'));
+
+            // 2) Atados de este registro
+            const atados = asArray(await dbRegistracionNET.raw(
+                `SELECT Atado, Rollos, Peso, Calidad, Etiqueta FROM AtadosPlancha
+                 WHERE Operacion_ID = ? AND Sobrante = 2 AND ID_LotePlancha = ? ORDER BY Atado`,
+                [operacionId, idLote]));
+            const mapped = atados.map(a => ({
+                atado: toInt(getCol(a, 'Atado')),
+                rollos: toInt(getCol(a, 'Rollos')),
+                peso: toFloat(getCol(a, 'Peso')),
+                esCalidad: toInt(getCol(a, 'Calidad')) === 1,
+                nroEtiqueta: toInt(getCol(a, 'Etiqueta'))
+            }));
+            if (esNoSeriado) salida.atadosNoSeriado.push(...mapped);
+            else salida.atadosSeriado.push(...mapped);
+        }
+
+        // 3) Totales de atados/rollos como el VB
+        try {
+            const tot = asArray(await dbRegistracionNET.raw(
+                "EXEC SP_TotalizarAtadosRegistradosPlancha @Operacion_ID=?, @ItemPedido_ID=?, @Sobrante=?",
+                [operacionId, SCRAP_KEY, 2]));
+            if (tot?.length) {
+                salida.atadosTotales = toInt(getCol(tot[0], 'TotalAtados'));
+                salida.rollosTotales = toInt(getCol(tot[0], 'TotalRollos'));
+            }
+        } catch (e) { /* SP opcional */ }
+
+        console.log(`🗑️ obtenerScrapEmbalaje → seriado=${salida.scrapSeriado} noSeriado=${salida.scrapNoSeriado} atadosS=${salida.atadosSeriado.length} atadosNS=${salida.atadosNoSeriado.length}`);
+        res.status(200).json(salida);
+    } catch (error) {
+        console.error('❌ Error obtenerScrapEmbalaje:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
 module.exports = {
     getMaquinas,
     getOperaciones,
@@ -8258,4 +9454,7 @@ module.exports = {
     eliminarPaqueteEmbalaje,
     pesarOperacionEmbalaje,
     validarCierre,
+    registrarScrapSeriado,
+    registrarScrapNoSeriado,
+    obtenerScrapEmbalaje,
 };
